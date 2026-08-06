@@ -1,0 +1,18 @@
+# 相依套件
+node_modules/
+
+# 環境變數與密鑰（絕不進 repo）
+.env
+.env.*
+*.key
+supabase/.env
+
+# 系統/編輯器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 暫存
+*.log
+*.tmp

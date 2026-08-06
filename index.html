@@ -1,0 +1,2532 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CareAI 長照智能分析系統</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 引入 Phosphor Icons 作為圖示 -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <style>
+    /* 自訂捲軸樣式 */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    
+    .animate-pulse-fast {
+      animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .5; }
+    }
+    
+    .fade-in {
+      animation: fadeIn 0.3s ease-out forwards;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 可手動編輯的結果欄位 */
+    .editable-field { cursor: text; transition: background 0.15s, box-shadow 0.15s; }
+    .editable-field:hover { box-shadow: inset 0 0 0 1px #cbd5e1; }
+    .editable-field:focus { outline: none; box-shadow: inset 0 0 0 2px #60a5fa; background: #ffffff; border-radius: 6px; }
+    .editable-field:empty::before { content: attr(data-placeholder); color: #cbd5e1; }
+  </style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-800 h-screen overflow-hidden flex relative">
+
+  <!-- ================= 登入覆蓋畫面 ================= -->
+  <div id="login-view" class="fixed inset-0 bg-slate-900 z-[100] flex flex-col items-center justify-center p-4 transition-opacity duration-300">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 flex flex-col items-center fade-in">
+      <div class="bg-blue-600 p-4 rounded-2xl mb-4 shadow-lg shadow-blue-600/30">
+        <i class="ph ph-stethoscope text-4xl text-white"></i>
+      </div>
+      <h1 class="text-2xl font-bold text-slate-800 mb-2">CareAI 登入</h1>
+      <p class="text-sm text-slate-500 mb-8">請選擇所屬機構並輸入密碼以進入專屬工作區</p>
+      
+      <div class="w-full space-y-4">
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-semibold text-slate-700">所屬機構</label>
+          <select id="login-ward" class="w-full px-4 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-slate-700">
+            <!-- 由 JS 動態產生選項 -->
+          </select>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-semibold text-slate-700">登入密碼 <span class="text-xs text-slate-400 font-normal">(預設: 1234)</span></label>
+          <input type="password" id="login-pwd" class="w-full px-4 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none" placeholder="請輸入密碼">
+        </div>
+        
+        <button id="login-btn" onclick="handleLogin()" class="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 px-4 rounded-xl transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-2">
+          <i id="login-btn-icon" class="ph ph-sign-in text-xl"></i> <span id="login-btn-text">進入系統</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 左側：導覽列 ================= -->
+  <aside class="w-64 bg-slate-900 text-white flex flex-col shadow-2xl z-20 shrink-0">
+    <div class="p-6 flex items-center gap-3 border-b border-slate-800">
+      <div class="bg-blue-600 p-2 rounded-lg">
+        <i class="ph ph-stethoscope text-2xl text-white"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-lg tracking-wide">CareAI</h1>
+        <p class="text-xs text-slate-400">長照智能分析系統</p>
+      </div>
+    </div>
+
+    <nav class="flex-1 py-6 px-4 space-y-2 overflow-y-auto">
+      <button onclick="switchTab('add-event')" id="tab-add-event" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 bg-blue-600 text-white shadow-md shadow-blue-900/50">
+        <i class="ph ph-file-text text-xl"></i>
+        <span class="font-medium">異常事件分析</span>
+      </button>
+      
+      <button onclick="switchTab('pdca')" id="tab-pdca" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-slate-400 hover:bg-slate-800 hover:text-slate-200 flex-wrap">
+        <i class="ph ph-chart-bar text-xl"></i>
+        <span class="font-medium">月底 PDCA 報告</span>
+        <span id="pdca-badge" class="ml-auto bg-rose-500 text-white text-xs font-bold px-2 py-0.5 rounded-full hidden">0</span>
+      </button>
+    </nav>
+
+    <!-- 設定按鈕 -->
+    <div class="p-4 border-t border-slate-800">
+      <button onclick="openSettingsModal()" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-slate-400 hover:bg-slate-800 hover:text-white">
+        <i class="ph ph-gear text-xl"></i>
+        <span class="font-medium">系統與資源設定</span>
+      </button>
+    </div>
+
+    <div class="p-6 border-t border-slate-800 shrink-0 bg-slate-950 flex justify-between items-center group">
+      <div class="flex items-center gap-3 text-sm text-slate-400">
+        <div class="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center border border-blue-500 shadow-sm">
+          <i class="ph ph-buildings text-white text-lg"></i>
+        </div>
+        <div>
+          <p class="text-white font-medium">當前登入機構</p>
+          <p class="text-xs font-bold text-blue-400" id="sidebar-ward-display">未登入</p>
+        </div>
+      </div>
+      <!-- 快捷登出按鈕 -->
+      <button onclick="handleLogout()" class="text-slate-500 hover:text-rose-500 transition-colors p-2 bg-slate-900 rounded-lg shadow-sm border border-slate-800 opacity-0 group-hover:opacity-100" title="登出當前機構">
+        <i class="ph ph-sign-out text-lg"></i>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ================= 中間：主視窗 ================= -->
+  <main class="flex-1 flex flex-col h-full overflow-y-auto relative z-10">
+    <div class="max-w-5xl w-full mx-auto p-8 flex-1 flex flex-col">
+      
+      <!-- ------------------ 單一事件分析介面 ------------------ -->
+      <div id="view-add-event" class="flex flex-col flex-1">
+        <header class="mb-6 shrink-0 flex flex-col gap-4">
+          <div class="w-full">
+            <h2 class="text-2xl font-bold text-slate-800 flex items-center gap-2 flex-wrap whitespace-nowrap">
+              <span class="whitespace-nowrap">異常事件智能分析與登錄</span>
+              <span id="editing-badge" class="hidden ml-2 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-md border border-amber-300 whitespace-nowrap">編輯模式</span>
+            </h2>
+            <p class="text-slate-500 mt-1">請選擇事件類型，並提供紀錄（手動輸入、結構化表單、文字或圖片），系統將自動生成標準化分析報告。</p>
+          </div>
+
+          <div class="flex flex-wrap gap-3 items-center w-full">
+            <div class="flex gap-2">
+              <button onclick="startNewEvent()" class="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-sm font-bold hover:bg-blue-100 transition-colors border border-blue-200 flex items-center gap-1 shadow-sm">
+                <i class="ph ph-plus"></i> 開新事件
+              </button>
+              <button onclick="openHistoryModal()" class="px-3 py-1.5 bg-white text-slate-600 rounded-lg text-sm font-bold hover:bg-slate-50 transition-colors border border-slate-200 flex items-center gap-1 shadow-sm">
+                <i class="ph ph-folder-open"></i> 歷史紀錄
+              </button>
+            </div>
+            <div class="flex bg-slate-200 p-1 rounded-lg shrink-0 shadow-inner overflow-x-auto max-w-full" id="api-version-selector">
+              <button onclick="setApiVersion('v1.0')" data-version="v1.0" class="version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V1.0 樣板</button>
+              <button onclick="setApiVersion('v2.0')" data-version="v2.0" class="version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V2.0 專業</button>
+              <button onclick="setApiVersion('v3.0')" data-version="v3.0" class="version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V3.0 嚴謹</button>
+              <button onclick="setApiVersion('v4.0')" data-version="v4.0" class="version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap bg-white shadow-sm text-blue-600">V4.0 務實 (落地版)</button>
+            </div>
+          </div>
+        </header>
+
+        <div class="flex flex-col gap-6 mb-8">
+          <div class="flex flex-wrap gap-3" id="event-mode-selector">
+            <button onclick="setEventMode('fall')" data-mode="fall" class="mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-blue-600 text-white shadow-md shadow-blue-200 border border-blue-600">
+              <i class="ph ph-warning text-lg"></i>跌倒事件
+            </button>
+            <button onclick="setEventMode('hospitalization')" data-mode="hospitalization" class="mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300">
+              <i class="ph ph-buildings text-lg"></i>非計畫性住院
+            </button>
+            <button onclick="setEventMode('pressure_ulcer')" data-mode="pressure_ulcer" class="mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300">
+              <i class="ph ph-activity text-lg"></i>壓傷事件
+            </button>
+            <button onclick="setEventMode('infection')" data-mode="infection" class="mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300">
+              <i class="ph ph-thermometer text-lg"></i>感染事件
+            </button>
+          </div>
+
+          <!-- 事件基本資料 -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="bg-slate-50/50 px-5 py-3 border-b border-slate-200">
+              <label class="font-semibold flex items-center gap-2 text-slate-700">
+                <i class="ph ph-user text-lg text-blue-600"></i> 事件基本資料
+              </label>
+            </div>
+            <div class="p-5 grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4">
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-semibold text-slate-500">事件日期 <span class="text-slate-400 font-normal">(用於 PDCA 季度分類，可補登)</span></label>
+                <input type="date" id="event-date" class="px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 bg-slate-50">
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-semibold text-slate-500">長輩姓名</label>
+                <input type="text" id="resident-name" class="px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 bg-slate-50" placeholder="例如：王大明">
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-semibold text-slate-500">床號</label>
+                <input type="text" id="resident-bed" class="px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 bg-slate-50" placeholder="例如：5C-12">
+              </div>
+            </div>
+          </div>
+
+          <!-- 手動輸入區塊 -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="bg-slate-50/50 px-5 py-3 border-b border-slate-200">
+              <label class="font-semibold flex items-center gap-2 text-slate-700">
+                <i class="ph ph-keyboard text-lg text-blue-600"></i> 手動輸入事件資訊 (可選)
+              </label>
+            </div>
+            <div class="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-4" id="manual-inputs-container"></div>
+          </div>
+          
+          <!-- 結構化選項 -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="bg-slate-50/50 px-5 py-3 border-b border-slate-200">
+              <label class="font-semibold flex items-center gap-2 text-slate-700">
+                <i class="ph ph-list-checks text-lg text-blue-600"></i> 結構化事件選擇 (可選)
+              </label>
+            </div>
+            <div class="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-5" id="form-options-container"></div>
+          </div>
+
+          <!-- 護理紀錄文字 -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+            <div class="bg-slate-50/50 px-5 py-3 border-b border-slate-200 flex justify-between items-center">
+              <label class="font-semibold flex items-center gap-2 text-slate-700">
+                <i class="ph ph-clipboard-text text-lg text-blue-600"></i> 貼上或輸入護理紀錄 (可選)
+              </label>
+              <span class="text-xs text-slate-400 font-medium bg-slate-200 px-2 py-1 rounded-md">支援語音轉文字</span>
+            </div>
+            <textarea id="record-text" oninput="handleTextareaChange(event)" class="w-full h-32 p-5 text-slate-700 placeholder-slate-400 focus:ring-0 focus:outline-none resize-none" placeholder="例如：10:30 發現王大明住民於床邊跌倒..."></textarea>
+          </div>
+
+          <!-- 照片上傳 -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <label class="font-semibold flex items-center gap-2 text-slate-700 mb-3 flex-wrap">
+              <i class="ph ph-cloud-arrow-up text-lg text-blue-600"></i>
+              <span>上傳紙本紀錄截圖 (可選，可多張)</span>
+            </label>
+            <div id="drop-zone" onclick="document.getElementById('file-input').click()" ondragover="event.preventDefault()" ondrop="handleDrop(event)" class="border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center transition-colors cursor-pointer group border-slate-300 bg-slate-50 hover:bg-blue-50/50 hover:border-blue-400">
+              <input type="file" id="file-input" multiple onchange="handleFileChange(event)" class="hidden" accept="image/jpeg,image/png,application/pdf" />
+              <div class="bg-white p-3 rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform"><i class="ph ph-cloud-arrow-up text-3xl text-slate-400 group-hover:text-blue-600"></i></div>
+              <p class="text-sm text-slate-600 font-medium mb-1">點擊或拖曳圖片至此處上傳</p>
+              <p class="text-xs text-slate-400">支援 JPG, PNG, PDF；可一次或分次上傳多個檔案（AI 將自動 OCR 視覺辨識）</p>
+            </div>
+            <div id="file-list" class="mt-3 flex flex-wrap gap-2"></div>
+            <!-- AI 截圖辨識摘要（圖片無法存資料庫，改以文字摘要保存）-->
+            <div id="image-summary-box" class="hidden mt-3 bg-blue-50/50 border border-blue-200 rounded-xl p-4">
+              <p class="text-xs font-bold text-blue-700 flex items-center gap-1.5 mb-1.5"><i class="ph ph-scan"></i> AI 截圖辨識摘要（已轉文字保存至雲端）</p>
+              <p id="image-summary-text" class="text-xs text-slate-600 leading-relaxed whitespace-pre-line"></p>
+            </div>
+          </div>
+        </div>
+
+        <div id="conflict-warning" class="hidden mb-6 bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start gap-3 shadow-sm">
+          <i class="ph ph-warning-circle text-rose-500 text-xl mt-0.5"></i>
+          <div>
+            <h4 class="text-sm font-bold text-rose-800">資料可能存在矛盾</h4>
+            <p id="conflict-message" class="text-sm text-rose-600 mt-1"></p>
+          </div>
+        </div>
+
+        <div class="mt-auto pb-8 shrink-0">
+          <button id="analyze-btn" onclick="handleAnalyze()" disabled class="w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all duration-200 shadow-lg bg-blue-600 hover:bg-blue-700 hover:-translate-y-0.5 text-white shadow-blue-600/30 active:translate-y-0">
+            <span id="analyze-btn-text" class="flex items-center gap-2"><i class="ph ph-brain text-2xl"></i> 🚀 送出 AI 智能分析 (<span id="btn-mode-name">跌倒事件</span>)</span>
+            <span id="analyze-btn-loading" class="hidden flex items-center justify-center gap-2 text-center w-full"><i class="ph ph-spinner animate-spin text-2xl shrink-0"></i> <span>AI 正在分析...</span></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- ------------------ PDCA 報告列表介面 ------------------ -->
+      <div id="view-pdca" class="hidden flex-col flex-1 h-full">
+        <header class="mb-6 shrink-0 flex flex-col gap-4">
+          <div class="w-full">
+            <h2 class="text-2xl font-bold text-slate-800 flex items-center gap-2 flex-wrap whitespace-nowrap">
+              <span class="whitespace-nowrap">月底 PDCA 品質改善報告庫</span>
+              <span id="pdca-editing-badge" class="hidden ml-2 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-md border border-amber-300 whitespace-nowrap">編輯歷史報告</span>
+            </h2>
+            <p class="text-slate-500 mt-1">選擇事件類型 + 日期區間，產出該類別的 PDCA 品質改善報告。</p>
+          </div>
+
+          <div class="flex gap-2 flex-wrap">
+            <button onclick="startNewPDCA()" class="px-3 py-1.5 bg-teal-50 text-teal-600 rounded-lg text-sm font-bold hover:bg-teal-100 transition-colors border border-teal-200 flex items-center gap-1 shadow-sm">
+              <i class="ph ph-plus"></i> 開新報告
+            </button>
+            <button onclick="openPDCAHistoryModal()" class="px-3 py-1.5 bg-white text-slate-600 rounded-lg text-sm font-bold hover:bg-slate-50 transition-colors border border-slate-200 flex items-center gap-1 shadow-sm">
+              <i class="ph ph-folder-open"></i> 歷史紀錄
+            </button>
+          </div>
+        </header>
+
+        <div class="flex flex-wrap gap-3 mb-4 shrink-0" id="pdca-mode-selector">
+          <button onclick="setPdcaEventMode('fall')" data-mode="fall" class="pdca-mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-blue-600 text-white shadow-md shadow-blue-200 border border-blue-600">
+            <i class="ph ph-warning text-lg"></i>跌倒 PDCA
+          </button>
+          <button onclick="setPdcaEventMode('hospitalization')" data-mode="hospitalization" class="pdca-mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300">
+            <i class="ph ph-buildings text-lg"></i>住院 PDCA
+          </button>
+          <button onclick="setPdcaEventMode('pressure_ulcer')" data-mode="pressure_ulcer" class="pdca-mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300">
+            <i class="ph ph-activity text-lg"></i>壓傷 PDCA
+          </button>
+          <button onclick="setPdcaEventMode('infection')" data-mode="infection" class="pdca-mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300">
+            <i class="ph ph-thermometer text-lg"></i>感染 PDCA
+          </button>
+        </div>
+
+        <div class="flex flex-col xl:flex-row gap-4 items-start xl:items-center mb-6 bg-white p-4 rounded-xl border border-slate-200 shadow-sm shrink-0">
+            <div class="flex items-center gap-2 text-sm font-semibold text-slate-600 shrink-0">
+                <i class="ph ph-calendar-blank text-slate-400 text-lg"></i> 篩選事件區間：
+            </div>
+            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full xl:w-auto">
+                <input type="date" id="pdca-start-date" class="w-full sm:w-auto px-3 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none">
+                <span class="text-slate-400 text-sm hidden sm:inline">至</span>
+                <input type="date" id="pdca-end-date" class="w-full sm:w-auto px-3 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none">
+            </div>
+            <div class="flex gap-2 w-full xl:w-auto xl:ml-auto mt-2 xl:mt-0">
+                <button onclick="filterPDCAEvents()" class="flex-1 xl:flex-none px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm text-center">套用篩選</button>
+                <button onclick="resetPDCAFilter()" class="px-4 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-sm font-bold hover:bg-slate-200 transition-colors border border-slate-200 shadow-sm">重置當季</button>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto mb-6" id="pdca-events-container">
+          <div id="pdca-empty-state" class="h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-200 rounded-2xl bg-white p-10">
+            <i class="ph ph-database text-5xl mb-4 text-slate-300"></i>
+            <p class="font-semibold text-lg">目前區間沒有儲存的異常事件</p>
+            <p class="text-sm mt-1">請在上方調整篩選日期，或在「異常事件分析」頁面產生報告並儲存</p>
+          </div>
+          <div id="pdca-events-list" class="grid grid-cols-1 md:grid-cols-2 gap-4 hidden">
+             <!-- 事件卡片由 JS 動態生成 -->
+          </div>
+        </div>
+
+        <!-- ============ 閾值設定 ============ -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mb-6 shrink-0">
+          <label class="font-semibold flex items-center gap-2 text-slate-700 mb-2 flex-wrap">
+            <i class="ph ph-sliders-horizontal text-lg text-amber-600"></i>
+            <span>閾值設定</span>
+            <span class="text-xs text-slate-400 font-normal">設定各品質指標閾值，AI 會比對截圖實際數據判斷哪些超標、需寫入 PDCA</span>
+          </label>
+          <div class="flex items-center gap-3 flex-wrap">
+            <button onclick="openThresholdModal()" class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-bold transition-colors shadow-sm flex items-center gap-1.5">
+              <i class="ph ph-table"></i> 開啟閾值設定表
+            </button>
+            <span id="threshold-status" class="text-xs text-slate-500"></span>
+          </div>
+        </div>
+
+        <!-- ============ PDCA 參考截圖上傳區 ============ -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mb-6 shrink-0">
+          <label class="font-semibold flex items-center gap-2 text-slate-700 mb-2 flex-wrap">
+            <i class="ph ph-image text-lg text-teal-600"></i>
+            <span>上傳參考截圖（可選，可多張）</span>
+            <span class="text-xs text-slate-400 font-normal">AI 會從圖中提取數值、表格、趨勢，融入分析</span>
+          </label>
+          <div id="pdca-drop-zone" onclick="document.getElementById('pdca-file-input').click()" ondragover="event.preventDefault()" ondrop="handlePdcaDrop(event)" class="border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center transition-colors cursor-pointer border-slate-300 bg-slate-50 hover:bg-teal-50/50 hover:border-teal-400">
+            <input type="file" id="pdca-file-input" multiple onchange="handlePdcaFileChange(event)" class="hidden" accept="image/jpeg,image/png" />
+            <i class="ph ph-cloud-arrow-up text-3xl text-slate-400 mb-1"></i>
+            <p class="text-sm text-slate-600 font-medium">點擊或拖曳圖片至此處上傳</p>
+            <p class="text-xs text-slate-400 mt-1">支援 JPG/PNG，可一次上傳多張（如月度統計表、趨勢圖、比較圖）</p>
+          </div>
+          <div id="pdca-file-list" class="mt-3 flex flex-wrap gap-2"></div>
+        </div>
+
+        <div class="mt-auto pb-8 shrink-0 flex flex-col gap-3">
+          <button id="generate-analysis-btn" onclick="handleGenerateCauseAnalysis()" disabled class="w-full py-3.5 rounded-xl font-bold text-base flex items-center justify-center gap-3 transition-all duration-200 shadow-lg bg-orange-300 text-white cursor-not-allowed">
+            <span id="generate-analysis-text" class="flex items-center gap-2"><i class="ph ph-magnifying-glass-plus text-xl"></i> 🔍 步驟一：產生原因分析（趨勢判讀）</span>
+            <span id="generate-analysis-loading" class="hidden flex items-center justify-center gap-2"><i class="ph ph-spinner animate-spin text-xl shrink-0"></i> <span>AI 正在判讀趨勢與根因...</span></span>
+          </button>
+          <button id="generate-pdca-btn" onclick="handleGeneratePDCA()" disabled class="w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all duration-200 shadow-lg bg-teal-400 text-white cursor-not-allowed shadow-teal-200">
+            <span id="generate-pdca-text" class="flex items-center gap-2"><i class="ph ph-target text-2xl"></i> 🚀 步驟二：生成 <span id="generate-pdca-mode-name">跌倒</span> PDCA 報告</span>
+            <span id="generate-pdca-loading" class="hidden flex items-center justify-center gap-2"><i class="ph ph-spinner animate-spin text-2xl shrink-0"></i> <span>AI 督導正在撰寫綜合報告...</span></span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- ================= 右側：分析結果區塊 ================= -->
+  <aside class="w-[400px] bg-white border-l border-slate-200 flex flex-col shadow-[-10px_0_15px_-3px_rgba(0,0,0,0.05)] z-20 shrink-0">
+    <div class="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+      <h3 id="aside-title" class="text-lg font-bold flex items-center gap-2 text-slate-800">
+        <i class="ph ph-magnifying-glass text-xl text-blue-600"></i> 單一事件分析
+      </h3>
+      <span id="aside-version-badge" class="hidden text-xs font-semibold bg-blue-100 text-blue-700 px-2 py-1 rounded-md">v3.0</span>
+    </div>
+    
+    <div class="flex-1 overflow-y-auto p-6" id="result-container">
+      
+      <!-- 載入中動畫 -->
+      <div id="loading-state" class="hidden space-y-6">
+        <div class="animate-pulse-fast flex flex-col gap-2"><div class="h-4 bg-slate-200 rounded w-1/4"></div><div class="h-10 bg-slate-100 rounded w-full"></div></div>
+        <div class="animate-pulse-fast flex flex-col gap-2"><div class="h-4 bg-slate-200 rounded w-1/4"></div><div class="h-10 bg-slate-100 rounded w-full"></div></div>
+        <div class="animate-pulse-fast flex flex-col gap-2"><div class="h-4 bg-slate-200 rounded w-1/4"></div><div class="h-10 bg-slate-100 rounded w-full"></div></div>
+        <div class="animate-pulse-fast flex flex-col gap-2"><div class="h-4 bg-slate-200 rounded w-1/4"></div><div class="h-10 bg-slate-100 rounded w-full"></div></div>
+      </div>
+
+      <div id="empty-state-event" class="h-full flex flex-col items-center justify-center text-center opacity-60">
+        <i class="ph ph-brain text-6xl text-slate-300 mb-4"></i>
+        <p class="text-slate-500 font-medium">等待輸入紀錄或選項</p>
+        <p class="text-sm text-slate-400 mt-1">AI 結果將即時顯示於此，圖片也可辨識喔！</p>
+      </div>
+
+      <div id="empty-state-pdca" class="hidden h-full flex flex-col items-center justify-center text-center opacity-60">
+        <i class="ph ph-target text-6xl text-slate-300 mb-4"></i>
+        <p class="text-slate-500 font-medium">等待生成綜合報告</p>
+        <p class="text-sm text-slate-400 mt-1">請點擊下方生成按鈕</p>
+      </div>
+
+      <!-- 單一事件產出結果 -->
+      <div id="result-event-content" class="hidden space-y-6 fade-in flex flex-col h-full">
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-start gap-3 shadow-sm shrink-0">
+          <i class="ph ph-shield-check text-emerald-600 shrink-0 mt-0.5 text-lg"></i>
+          <div>
+            <p class="text-sm font-bold text-emerald-800">隱私保護與資料摘要完成</p>
+            <p id="res-deidentified" class="text-xs text-emerald-600 mt-1 line-clamp-3"></p>
+          </div>
+        </div>
+
+        <div class="space-y-4 flex-1">
+          <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-white group">
+            <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2"><i class="ph ph-activity text-blue-500"></i><h4 class="text-sm font-bold text-slate-700">事件類型</h4></div>
+            </div>
+            <div class="p-4 text-sm text-slate-600 leading-relaxed relative" id="res-event-type"></div>
+          </div>
+          <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-rose-50/30 group relative">
+            <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2"><i class="ph ph-magnifying-glass text-rose-500"></i><h4 class="text-sm font-bold text-slate-700">原因分析</h4><span class="text-[10px] text-slate-400 font-normal flex items-center gap-0.5"><i class="ph ph-pencil-simple"></i>可編輯</span></div>
+              <div class="flex gap-2">
+                <button id="undo-btn-rootCause" onclick="handleUndo('rootCause')" class="hidden text-amber-500 hover:text-amber-700 transition-colors" title="復原上一個版本"><i class="ph ph-arrow-counter-clockwise text-lg"></i></button>
+                <button onclick="handleRegenerateField('rootCause')" class="text-slate-400 hover:text-blue-600 transition-colors" title="重新生成此欄位"><i class="ph ph-arrows-clockwise text-lg"></i></button>
+                <button onclick="handleCopyField('res-root-cause')" class="text-slate-400 hover:text-blue-600 transition-colors" title="複製"><i class="ph ph-copy text-lg"></i></button>
+              </div>
+            </div>
+            <div class="p-4 text-sm text-slate-600 leading-relaxed editable-field" id="res-root-cause" contenteditable="true" onblur="syncEditableField('event','rootCause',this)" title="可直接點擊文字修改；修改後重新生成下游欄位會沿用你的修改"></div>
+             <div id="loading-rootCause" class="absolute inset-0 bg-rose-50/80 hidden items-center justify-center backdrop-blur-[1px]"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>
+          </div>
+          <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-emerald-50/30 group relative">
+            <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2"><i class="ph ph-check-circle text-emerald-500"></i><h4 class="text-sm font-bold text-slate-700">改善措施</h4><span class="text-[10px] text-slate-400 font-normal flex items-center gap-0.5"><i class="ph ph-pencil-simple"></i>可編輯</span></div>
+              <div class="flex gap-2">
+                <button id="undo-btn-improvement" onclick="handleUndo('improvement')" class="hidden text-amber-500 hover:text-amber-700 transition-colors" title="復原上一個版本"><i class="ph ph-arrow-counter-clockwise text-lg"></i></button>
+                <button onclick="handleRegenerateField('improvement')" class="text-slate-400 hover:text-blue-600 transition-colors" title="重新生成此欄位"><i class="ph ph-arrows-clockwise text-lg"></i></button>
+                <button onclick="handleCopyField('res-improvement', true)" class="text-slate-400 hover:text-blue-600 transition-colors" title="複製 (過濾括號時間)"><i class="ph ph-copy text-lg"></i></button>
+              </div>
+            </div>
+            <div class="p-4 text-sm text-slate-600 leading-relaxed editable-field" id="res-improvement" contenteditable="true" onblur="syncEditableField('event','improvement',this)" title="可直接點擊文字修改；修改後重新生成下游欄位會沿用你的修改"></div>
+             <div id="loading-improvement" class="absolute inset-0 bg-emerald-50/80 hidden items-center justify-center backdrop-blur-[1px]"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>
+          </div>
+          <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-amber-50/30 group relative">
+            <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2"><i class="ph ph-clock text-amber-500"></i><h4 class="text-sm font-bold text-slate-700">追蹤情形</h4><span class="text-[10px] text-slate-400 font-normal flex items-center gap-0.5"><i class="ph ph-pencil-simple"></i>可編輯</span></div>
+              <div class="flex gap-2">
+                <button id="undo-btn-followUp" onclick="handleUndo('followUp')" class="hidden text-amber-500 hover:text-amber-700 transition-colors" title="復原上一個版本"><i class="ph ph-arrow-counter-clockwise text-lg"></i></button>
+                <button onclick="handleRegenerateField('followUp')" class="text-slate-400 hover:text-blue-600 transition-colors" title="重新生成此欄位"><i class="ph ph-arrows-clockwise text-lg"></i></button>
+                <button onclick="handleCopyField('res-follow-up')" class="text-slate-400 hover:text-blue-600 transition-colors" title="複製"><i class="ph ph-copy text-lg"></i></button>
+              </div>
+            </div>
+            <div class="p-4 text-sm text-slate-600 leading-relaxed editable-field" id="res-follow-up" contenteditable="true" onblur="syncEditableField('event','followUp',this)" title="可直接點擊文字修改；修改後重新生成下游欄位會沿用你的修改"></div>
+            <div id="loading-followUp" class="absolute inset-0 bg-amber-50/80 hidden items-center justify-center backdrop-blur-[1px]"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>
+          </div>
+        </div>
+
+        <div class="pt-4 flex flex-col gap-3 shrink-0">
+          <button onClick="handleSaveToPDCA()" id="save-event-btn" className="w-full bg-blue-600 text-white py-3 rounded-xl text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm flex items-center justify-center gap-2">
+            <i class="ph ph-cloud-arrow-up text-lg"></i> <span id="save-event-btn-text">同步儲存至機構雲端與 PDCA 庫</span>
+          </button>
+          <button onClick="handleExportEvent()" className="w-full bg-white text-slate-600 border border-slate-200 py-2.5 rounded-lg text-sm font-bold hover:bg-slate-50 transition-colors shadow-sm flex items-center justify-center gap-2">
+            <i class="ph ph-file-text text-lg"></i> 僅匯出本機檔案 (TXT)
+          </button>
+        </div>
+      </div>
+
+      <!-- PDCA 綜合報告產出結果 -->
+      <div id="result-pdca-content" class="hidden space-y-6 fade-in flex flex-col h-full">
+        <div class="space-y-4 flex-1">
+          <!-- 原因分析（趨勢判讀）卡片 -->
+          <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-orange-50/40 group relative">
+            <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2"><i class="ph ph-magnifying-glass-plus text-orange-500"></i><h4 class="text-sm font-bold text-slate-700">原因分析（趨勢判讀）</h4><span class="text-[10px] text-slate-400 font-normal flex items-center gap-0.5"><i class="ph ph-pencil-simple"></i>可編輯</span></div>
+              <div class="flex gap-2">
+                <button id="undo-btn-causeAnalysis" onclick="handleUndo('causeAnalysis')" class="hidden text-amber-500 hover:text-amber-700 transition-colors" title="復原上一個版本"><i class="ph ph-arrow-counter-clockwise text-lg"></i></button>
+                <button onclick="handleGenerateCauseAnalysis()" class="text-slate-400 hover:text-orange-600 transition-colors" title="重新生成原因分析"><i class="ph ph-arrows-clockwise text-lg"></i></button>
+                <button onclick="handleCopyPDCAField('causeAnalysis')" class="text-slate-400 hover:text-orange-600 transition-colors" title="複製"><i class="ph ph-copy text-lg"></i></button>
+              </div>
+            </div>
+            <div class="p-4 text-sm text-slate-600 leading-relaxed editable-field" id="res-pdca-analysis" contenteditable="true" onblur="syncEditableField('pdca','causeAnalysis',this)" title="可直接點擊文字修改；修改後重新生成 PDCA 各欄會沿用你的修改"></div>
+            <div id="loading-pdca-analysis" class="absolute inset-0 bg-orange-50/80 hidden items-center justify-center backdrop-blur-[1px]"><i class="ph ph-spinner animate-spin text-2xl text-orange-600"></i></div>
+          </div>
+
+          <div id="pdca-fields-wrap" class="space-y-4">
+          <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-indigo-50/30 group relative">
+            <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2"><i class="ph ph-target text-indigo-500"></i><h4 class="text-sm font-bold text-slate-700">[P] Plan 計畫</h4><span class="text-[10px] text-slate-400 font-normal flex items-center gap-0.5"><i class="ph ph-pencil-simple"></i>可編輯</span></div>
+              <div class="flex gap-2">
+                <button id="undo-btn-plan" onclick="handleUndo('plan')" class="hidden text-amber-500 hover:text-amber-700 transition-colors" title="復原上一個版本"><i class="ph ph-arrow-counter-clockwise text-lg"></i></button>
+                <button onclick="handleRegeneratePDCAField('plan')" class="text-slate-400 hover:text-indigo-600 transition-colors" title="重新生成此欄位"><i class="ph ph-arrows-clockwise text-lg"></i></button>
+                <button onclick="handleCopyPDCAField('plan')" class="text-slate-400 hover:text-indigo-600 transition-colors" title="複製"><i class="ph ph-copy text-lg"></i></button>
+              </div>
+            </div>
+            <div class="p-4 text-sm text-slate-600 leading-relaxed editable-field" id="res-pdca-plan" contenteditable="true" onblur="syncEditableField('pdca','plan',this)" title="可直接點擊文字修改；修改後重新生成下游欄位會沿用你的修改"></div>
+            <div id="loading-pdca-plan" class="absolute inset-0 bg-indigo-50/80 hidden items-center justify-center backdrop-blur-[1px]"><i class="ph ph-spinner animate-spin text-2xl text-indigo-600"></i></div>
+          </div>
+          <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-sky-50/30 group relative">
+            <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2"><i class="ph ph-play text-sky-500"></i><h4 class="text-sm font-bold text-slate-700">[D] Do 執行</h4><span class="text-[10px] text-slate-400 font-normal flex items-center gap-0.5"><i class="ph ph-pencil-simple"></i>可編輯</span></div>
+              <div class="flex gap-2">
+                <button id="undo-btn-do" onclick="handleUndo('do')" class="hidden text-amber-500 hover:text-amber-700 transition-colors" title="復原上一個版本"><i class="ph ph-arrow-counter-clockwise text-lg"></i></button>
+                <button onclick="handleRegeneratePDCAField('do')" class="text-slate-400 hover:text-sky-600 transition-colors" title="重新生成此欄位"><i class="ph ph-arrows-clockwise text-lg"></i></button>
+                <button onclick="handleCopyPDCAField('do')" class="text-slate-400 hover:text-sky-600 transition-colors" title="複製"><i class="ph ph-copy text-lg"></i></button>
+              </div>
+            </div>
+            <div class="p-4 text-sm text-slate-600 leading-relaxed editable-field" id="res-pdca-do" contenteditable="true" onblur="syncEditableField('pdca','do',this)" title="可直接點擊文字修改；修改後重新生成下游欄位會沿用你的修改"></div>
+            <div id="loading-pdca-do" class="absolute inset-0 bg-sky-50/80 hidden items-center justify-center backdrop-blur-[1px]"><i class="ph ph-spinner animate-spin text-2xl text-sky-600"></i></div>
+          </div>
+          <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-teal-50/30 group relative">
+            <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2"><i class="ph ph-check-square text-teal-500"></i><h4 class="text-sm font-bold text-slate-700">[C] Check 查核</h4><span class="text-[10px] text-slate-400 font-normal flex items-center gap-0.5"><i class="ph ph-pencil-simple"></i>可編輯</span></div>
+              <div class="flex gap-2">
+                <button id="undo-btn-check" onclick="handleUndo('check')" class="hidden text-amber-500 hover:text-amber-700 transition-colors" title="復原上一個版本"><i class="ph ph-arrow-counter-clockwise text-lg"></i></button>
+                <button onclick="handleRegeneratePDCAField('check')" class="text-slate-400 hover:text-teal-600 transition-colors" title="重新生成此欄位"><i class="ph ph-arrows-clockwise text-lg"></i></button>
+                <button onclick="handleCopyPDCAField('check')" class="text-slate-400 hover:text-teal-600 transition-colors" title="複製"><i class="ph ph-copy text-lg"></i></button>
+              </div>
+            </div>
+            <div class="p-4 text-sm text-slate-600 leading-relaxed editable-field" id="res-pdca-check" contenteditable="true" onblur="syncEditableField('pdca','check',this)" title="可直接點擊文字修改；修改後重新生成下游欄位會沿用你的修改"></div>
+            <div id="loading-pdca-check" class="absolute inset-0 bg-teal-50/80 hidden items-center justify-center backdrop-blur-[1px]"><i class="ph ph-spinner animate-spin text-2xl text-teal-600"></i></div>
+          </div>
+          <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-violet-50/30 group relative">
+            <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2"><i class="ph ph-arrows-clockwise text-violet-500"></i><h4 class="text-sm font-bold text-slate-700">[A] Act 行動</h4><span class="text-[10px] text-slate-400 font-normal flex items-center gap-0.5"><i class="ph ph-pencil-simple"></i>可編輯</span></div>
+              <div class="flex gap-2">
+                <button id="undo-btn-act" onclick="handleUndo('act')" class="hidden text-amber-500 hover:text-amber-700 transition-colors" title="復原上一個版本"><i class="ph ph-arrow-counter-clockwise text-lg"></i></button>
+                <button onclick="handleRegeneratePDCAField('act')" class="text-slate-400 hover:text-violet-600 transition-colors" title="重新生成此欄位"><i class="ph ph-arrows-clockwise text-lg"></i></button>
+                <button onclick="handleCopyPDCAField('act')" class="text-slate-400 hover:text-violet-600 transition-colors" title="複製"><i class="ph ph-copy text-lg"></i></button>
+              </div>
+            </div>
+            <div class="p-4 text-sm text-slate-600 leading-relaxed editable-field" id="res-pdca-act" contenteditable="true" onblur="syncEditableField('pdca','act',this)" title="可直接點擊文字修改；修改後重新生成下游欄位會沿用你的修改"></div>
+            <div id="loading-pdca-act" class="absolute inset-0 bg-violet-50/80 hidden items-center justify-center backdrop-blur-[1px]"><i class="ph ph-spinner animate-spin text-2xl text-violet-600"></i></div>
+          </div>
+          </div>
+        </div>
+
+        <div class="pt-4 flex flex-col gap-3 shrink-0">
+          <button onClick="handleSavePDCAReport()" id="save-pdca-btn" className="w-full bg-teal-600 text-white py-3 rounded-xl text-base font-bold hover:bg-teal-700 transition-colors shadow-sm shadow-teal-200 flex items-center justify-center gap-2">
+            <i class="ph ph-cloud-arrow-up text-lg"></i> <span id="save-pdca-btn-text">儲存 PDCA 報告至雲端資料庫</span>
+          </button>
+          <button onClick="handleExportPDCA()" className="w-full bg-white text-slate-600 border border-slate-200 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-50 transition-colors shadow-sm flex items-center justify-center gap-2">
+            <i class="ph ph-file-text text-lg"></i> 僅匯出本機檔案 (TXT)
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- ================= 設定彈出視窗 ================= -->
+  <div id="settings-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px] z-50 hidden items-center justify-center fade-in">
+    <div class="bg-white rounded-2xl shadow-2xl w-[550px] max-w-[95vw] flex flex-col overflow-hidden border border-slate-200">
+      <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/80">
+        <h3 class="font-bold text-slate-800 flex items-center gap-2 text-lg">
+          <i class="ph ph-gear text-blue-600"></i> 系統與機構資源設定
+        </h3>
+        <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-slate-700 transition-colors bg-white rounded-md p-1 border border-slate-200"><i class="ph ph-x text-lg"></i></button>
+      </div>
+      <div class="p-6 space-y-6 overflow-y-auto max-h-[70vh]">
+        <div class="space-y-3">
+          <h4 class="font-bold text-slate-700 flex items-center gap-2 text-sm"><i class="ph ph-lock text-lg"></i> 機構帳號與安全</h4>
+          <div class="flex flex-col gap-1.5 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+            <label class="text-xs font-semibold text-slate-600">修改當前機構登入密碼</label>
+            <div class="flex gap-2">
+              <input type="password" id="setting-new-pwd" placeholder="輸入新密碼" class="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all bg-white">
+              <button id="change-pwd-btn" onclick="handleChangePassword()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-semibold transition-colors">變更密碼</button>
+            </div>
+            <p class="text-[10px] text-slate-400 mt-1">此修改將同步至資料庫，請牢記新密碼。</p>
+          </div>
+        </div>
+        <div class="border-t border-slate-100"></div>
+        <div class="space-y-3 bg-blue-50/50 p-4 rounded-xl border border-blue-100 hidden">
+          <input type="text" id="setting-gas-url" placeholder="https://script.google.com/macros/s/.../exec">
+        </div>
+        <div class="space-y-3">
+          <h4 class="font-bold text-slate-700 flex items-center gap-2 text-sm"><i class="ph ph-toolbox text-lg"></i> AI 資源預設</h4>
+          <p class="text-xs text-slate-500 leading-relaxed">這些內容將作為 AI 提供具體改善建議時的背景參考資訊。</p>
+          <div class="space-y-3 mt-2">
+            <div class="flex flex-col gap-1.5"><label class="text-xs font-semibold text-slate-600">目前已實施措施</label><input type="text" id="setting-current-measures" class="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"></div>
+            <div class="flex flex-col gap-1.5"><label class="text-xs font-semibold text-slate-600">現有設備 / 輔具清單</label><input type="text" id="setting-available-tools" class="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"></div>
+            <div class="flex flex-col gap-1.5"><label class="text-xs font-semibold text-slate-600">可協助人力 / 家屬態度</label><input type="text" id="setting-staffing-family" class="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"></div>
+          </div>
+        </div>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+        <button onclick="closeSettingsModal()" class="px-5 py-2 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100">取消</button>
+        <button onclick="saveAndCloseSettings()" class="px-5 py-2 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 flex items-center gap-2"><i class="ph ph-floppy-disk"></i> 儲存並套用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 歷史紀錄 Modal (異常事件) ================= -->
+  <div id="history-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px] z-50 hidden items-center justify-center fade-in">
+    <div class="bg-white rounded-2xl shadow-2xl w-[800px] max-w-[95vw] max-h-[85vh] flex flex-col overflow-hidden border border-slate-200">
+      <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/80">
+        <h3 class="font-bold text-slate-800 flex items-center gap-2 text-lg">
+          <i class="ph ph-folder-open text-blue-600"></i> 單一事件雲端歷史紀錄
+        </h3>
+        <button onclick="closeHistoryModal()" class="text-slate-400 hover:text-slate-700 transition-colors bg-white rounded-md p-1 border border-slate-200"><i class="ph ph-x text-lg"></i></button>
+      </div>
+      <div class="p-6 overflow-y-auto flex-1 bg-slate-50">
+        <div id="history-modal-list" class="flex flex-col gap-3"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 歷史紀錄 Modal (PDCA) ================= -->
+  <div id="pdca-history-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px] z-50 hidden items-center justify-center fade-in">
+    <div class="bg-white rounded-2xl shadow-2xl w-[800px] max-w-[95vw] max-h-[85vh] flex flex-col overflow-hidden border border-slate-200">
+      <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/80">
+        <h3 class="font-bold text-slate-800 flex items-center gap-2 text-lg">
+          <i class="ph ph-folder-open text-teal-600"></i> PDCA 綜合報告歷史紀錄
+        </h3>
+        <button onclick="closePDCAHistoryModal()" class="text-slate-400 hover:text-slate-700 transition-colors bg-white rounded-md p-1 border border-slate-200"><i class="ph ph-x text-lg"></i></button>
+      </div>
+      <div class="p-6 overflow-y-auto flex-1 bg-slate-50">
+        <div id="pdca-history-modal-list" class="flex flex-col gap-3"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 閾值設定 Modal ================= -->
+  <div id="threshold-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px] z-50 hidden items-center justify-center fade-in">
+    <div class="bg-white rounded-2xl shadow-2xl w-[780px] max-w-[95vw] max-h-[88vh] flex flex-col overflow-hidden border border-slate-200">
+      <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/80">
+        <h3 class="font-bold text-slate-800 flex items-center gap-2 text-lg">
+          <i class="ph ph-sliders-horizontal text-amber-600"></i> 閾值設定（品質指標）
+        </h3>
+        <button onclick="closeThresholdModal()" class="text-slate-400 hover:text-slate-700 transition-colors bg-white rounded-md p-1 border border-slate-200"><i class="ph ph-x text-lg"></i></button>
+      </div>
+      <div class="px-6 py-3 bg-amber-50 border-b border-amber-100 text-xs text-amber-700 leading-relaxed">
+        填入各指標的「去年平均」與「閾值」。產生原因分析與 PDCA 時，AI 會比對參考截圖的實際數據與此處閾值，判斷哪些指標已超標、需納入改善重點。
+      </div>
+      <div class="p-6 overflow-y-auto flex-1 bg-slate-50" id="threshold-form-container"></div>
+      <div class="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+        <button onclick="closeThresholdModal()" class="px-5 py-2 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100">取消</button>
+        <button onclick="saveThresholdModal()" id="save-threshold-modal-btn" class="px-5 py-2 rounded-xl text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 flex items-center gap-2"><i class="ph ph-floppy-disk"></i> 儲存並同步雲端</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ----------------------------------------------------------------------
+    // 定義全局 Helper
+    // ----------------------------------------------------------------------
+    window.showToast = function(message) {
+      const toast = document.createElement('div');
+      toast.className = "fixed bottom-5 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg z-50 animate-in fade-in slide-in-from-bottom-5";
+      toast.innerText = message;
+      document.body.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.5s ease-out';
+        setTimeout(() => document.body.removeChild(toast), 500);
+      }, 2000);
+    };
+
+    const fetchWithRetry = async (url, options) => {
+      const delays = [1000, 2000, 4000, 8000, 16000]; 
+      let response;
+      for (let i = 0; i < delays.length; i++) {
+        try { 
+            response = await fetch(url, options); 
+            if (response.ok) return response; 
+            if (response.status === 429 || response.status >= 500) throw new Error("Retryable error");
+            return response; 
+        } catch (error) { 
+            if (i === delays.length - 1 && response) return response; 
+            if (i === delays.length - 1) throw error; 
+        }
+        await new Promise(resolve => setTimeout(resolve, delays[i]));
+      } 
+      return response;
+    };
+
+    // ----------------------------------------------------------------------
+    // 狀態變數與設定
+    // ----------------------------------------------------------------------
+    const WARD_LIST = ['2CD','3C','3D','3E','5C','5D','5E','6C','6D','6E','7C','7D','7E','8C','8D','8E','一館','二館','三館'];
+    // 顯示用助手：含「館」字者不加「區」後綴
+    function wardDisplay(ward) { return /館$/.test(ward) ? ward : (ward + ' 區'); }
+    let currentLoggedWard = null;
+    let editingEventId = null; 
+    let editingPdcaId = null; 
+    let cloudEventsList = [];  
+    let cloudPdcaList = [];
+    let pdcaFilteredEvents = []; 
+
+    // ⚙️ Supabase Gemini 代理網址（部署 Edge Function 後填入；金鑰放 Supabase 後端，不寫在此）
+    const GEMINI_PROXY_URL = "__FILL_SUPABASE_FUNCTION_URL__";
+    // 資料後端(Google Apps Script)網址：公開版不寫死，請登入後於「系統與資源設定」填入
+    const DEFAULT_GAS_URL = "";
+
+    // 已停用的舊部署網址（localStorage 若仍快取這些，會自動改用最新的 DEFAULT_GAS_URL）
+    const DEPRECATED_GAS_URLS = [];
+
+    // 確保不會讀取到無效或預設的網址
+    function getGasUrl(ward = currentLoggedWard) {
+        let url = localStorage.getItem(`careai_gas_url_${ward}`);
+        if (!url || url.trim() === '' || url.includes('...') || DEPRECATED_GAS_URLS.includes(url.trim())) {
+            return DEFAULT_GAS_URL;
+        }
+        return url.trim();
+    }
+
+    const MANUAL_INPUTS_CONFIG = {
+      fall: [{ key: 'fall_diagnosis', label: '主要診斷' }, { key: 'fall_adl', label: 'ADL分數' }, { key: 'fall_datetime', label: '日期時間' }, { key: 'fall_location', label: '地點' }, { key: 'fall_situation', label: '情境' }, { key: 'fall_cause', label: '原因' }, { key: 'fall_restraint', label: '約束物' }, { key: 'fall_meds', label: '藥物' }, { key: 'fall_injury', label: '受傷狀況' }, { key: 'fall_part', label: '部位' }, { key: 'fall_desc', label: '狀況描述' }],
+      hospitalization: [{ key: 'hosp_date', label: '轉診/住院日期' }, { key: 'hosp_reason', label: '轉診/住院主要診斷或原因' }, { key: 'hosp_analysis', label: '導因分析' }, { key: 'hosp_result', label: '處理結果' }],
+      pressure_ulcer: [{ key: 'pu_time', label: '發生時間' }, { key: 'pu_location', label: '發生地點' }, { key: 'pu_cause', label: '發生原因' }, { key: 'pu_part', label: '壓傷部位' }, { key: 'pu_stage', label: '級數' }, { key: 'pu_area', label: '範圍' }, { key: 'pu_healing', label: '療合日期' }],
+      infection: [{ key: 'inf_date', label: '日期' }, { key: 'inf_type', label: '疑似感染種類' }, { key: 'inf_symptoms', label: '症狀' }, { key: 'inf_measures', label: '照護措施' }, { key: 'inf_followup', label: '改善追蹤' }, { key: 'inf_confirm', label: '感染確診類型' }]
+    };
+
+    const FORM_CONFIGS = {
+      fall: [{ key: 'gender', label: '性別', type: 'single', options: ['男', '女'] }, { key: 'location', label: '地點', type: 'single', options: ['房間內', '床邊', '浴廁', '活動區', '走道', '其他'] }, { key: 'situation', label: '情境', type: 'single', options: ['如廁', '上下床', '活動當中', '由輪椅滑落', '輪椅上站起', '跨床欄', '其他'] }, { key: 'cause', label: '原因分析', type: 'single', options: ['住民健康狀況', '治療或藥物反應', '環境中危險因子', '其他'] }, { key: 'restraint', label: '約束物', type: 'multiple', options: ['雙側床欄', '單側床欄', '腰部約束帶', '背心約束帶', '未使用約束', '約束帶', '乒乓球手套'] }, { key: 'medication', label: '藥物', type: 'multiple', options: ['抗組織胺', '抗高血壓', '鎮靜安眠藥', '肌肉鬆弛劑', '輕瀉劑', '利尿劑', '抗抑鬱藥', '降血糖藥', '無'] }, { key: 'injury', label: '傷害程度', type: 'single', options: ['無傷', '擦傷/淤青', '疑似骨折', '骨折', '頭部外傷', '其他'] }, { key: 'isYesNo', label: '是否通報家屬', type: 'single', options: ['是', '否'] }, { key: 'progress', label: '完成進度', type: 'single', options: ['已完成', '進行中', '尚未開始', '不適用'] }],
+      hospitalization: [{ key: 'hosp_reason', label: '住院原因', type: 'single', options: ['呼吸道感染', '泌尿道感染', '腸胃道疾病', '心血管疾病', '跌倒骨折', '不明原因發燒', '其他'] }, { key: 'hosp_hospital', label: '轉送醫院', type: 'single', options: ['合作醫院', '家屬指定醫院', '急診', '其他'] }, { key: 'hosp_vitals', label: '生命徵象異常', type: 'multiple', options: ['發燒', '血壓異常', '心跳異常', '血氧低下', '意識改變', '無'] }, { key: 'hosp_family', label: '家屬通知狀態', type: 'single', options: ['已通知且同意', '已通知待決定', '未聯絡上'] }],
+      pressure_ulcer: [{ key: 'pu_stage', label: '壓傷分級', type: 'single', options: ['第一級', '第二級', '第三級', '第四級', '無法分級', '深層組織損傷'] }, { key: 'pu_location', label: '發生部位', type: 'multiple', options: ['薦骨', '腳跟', '股骨大轉子', '坐骨結節', '枕骨', '腳踝', '其他'] }, { key: 'pu_status', label: '傷口狀態', type: 'multiple', options: ['滲液', '異味', '壞死組織', '肉芽組織', '感染跡象'] }, { key: 'pu_device', label: '目前減壓輔具', type: 'multiple', options: ['氣墊床', '水球/水墊', '減壓坐墊', '翻身枕', '無'] }, { key: 'pu_nutrition', label: '營養狀態', type: 'single', options: ['良好', '普通', '差(需補充)'] }],
+      infection: [{ key: 'inf_type', label: '感染類型', type: 'single', options: ['呼吸道(如流感/COVID)', '泌尿道', '腸胃道', '皮膚/傷口', '不明發燒', '其他'] }, { key: 'inf_symptom', label: '主要症狀', type: 'multiple', options: ['發燒', '咳嗽/痰多', '腹瀉/嘔吐', '頻尿/尿混濁', '傷口紅腫熱痛', '倦怠/食慾不振'] }, { key: 'inf_isolation', label: '隔離措施', type: 'single', options: ['標準防護', '接觸隔離', '飛沫隔離', '空氣隔離', '尚未隔離'] }, { key: 'inf_antibiotic', label: '抗生素使用', type: 'single', options: ['已使用', '未使用', '評估中'] }, { key: 'inf_report', label: '通報狀態', type: 'single', options: ['法定通報', '內部通報', '免通報'] }]
+    };
+
+    const EVENT_MODES = [
+      { id: 'fall', name: '跌倒事件' }, { id: 'hospitalization', name: '非計畫性住院' }, { id: 'pressure_ulcer', name: '壓傷事件' }, { id: 'infection', name: '感染事件' }
+    ];
+
+    // =====================================================================
+    // 單一事件（逐案分析）欄位輸出規則 —— 共用常數
+    // 「第一次產生 (handleAnalyze)」與「重新生成 (handleRegenerateField)」
+    // 都讀取同一份規則，確保格式、語氣、條列方式永遠一致，不會各改各的。
+    // =====================================================================
+    const EVENT_FIELD_RULES = {
+      rootCause: '以條列式列出事件的根本原因，每點以「N.」編號開頭（N 從 1 起算），每點之間用換行符號分隔；語氣專業客觀、就事論事，不腦補未提供的資訊。',
+      improvement: '針對「原因分析」逐項提出對策，優先結合機構可用資源與設備，制定「具體、可行」的改善措施；改善措施總數請達 5～7 點（若原因較少，可從環境、設備、流程、人員訓練、家屬衛教等不同面向補充延伸，確保涵蓋完整），不可少於 5 點；每點以「N.」編號開頭；每點結尾務必加上「實際建議的完成或執行時間」，用半形括號包住，例如：(建議於 3 天內完成)、(建議 1 週內)、(建議每班執行)、(建議每月稽核一次)、(建議立即執行) —— 請依措施性質填入具體時間，切勿原樣輸出「建議操作時間」這幾個字；每點之間用換行符號分隔。',
+      followUp: '以條列式撰寫「後續要追蹤的計畫」——一律用未來式，描述「之後要追蹤／確認的事項」（例如「追蹤…是否落實」「確認…執行成效」），嚴禁寫成「已完成…」「已會診…」等過去式；與「改善措施」一對一對應；每點開頭必須使用【全形括號＋台灣日期格式（年/月/日，年在前，日期一律留白）】：「（ 　/　/　）」或「（ 　/　/　－持續）」，不可用半形括號、不可自行填入日期；每點之間用換行符號分隔。'
+    };
+
+    // =====================================================================
+    // PDCA 樣板：依據機構提供之常用字範本，由「具體案例版」與「公用 SOP 版」
+    // 比對後保留最佳格式。AI 必須完全沿用此版型撰寫，僅以事件清單實況替換
+    // 日期/百分比/密度/床數/人數等可推斷數據；無資料處保留「　/　/　」「___%」
+    // =====================================================================
+    const PDCA_STYLE_TEMPLATES = {
+      // -------------------- 跌倒 --------------------
+      fall: {
+        pointHint: 'Plan 5–7 點 / Do 5–7 點 / Check 5–7 點 / Act 1 點',
+        plan:
+`1. 預計(　年　月　日)前完成住民跌倒事件探討及分析
+2. (　年　月)確立晨會交班時報告高危險跌倒住民；加強探視及住民生活照顧
+3. (　年　月　日)前全面檢查呼叫鈴功能以及衛教長輩確實使用叫人鈴
+4. (　年　月)安排長輩下肢強化運動
+5. 機構會議說明注意事項
+（依事件實況可擇 1–2 項加入：確認住民使用合宜之輔具與復健活動 / 持續監測用藥狀況必要時請醫師調整 / 保養輪椅功能 / 發生跌倒立即通知家屬達成共識 / 稽核工作人員協助上下床之正確性）`,
+        do:
+`1. (　年　月　日)護理長、護理師、照服組長以及照服員2位共同確認並完成跌倒住民事件探討與分析，所有工作人員共同發現問題
+2. (　/　/　~　/　)訂定晨會交班時報告高危險跌倒住民交班常規，以及衛教長輩叫人鈴使用，並多加巡視房間，給予住民關懷，增加住民安全感
+3. (　/　/　~　/　)落實檢查所有住房(N床叫人鈴功能)，並了解住民是否會使用及使用時機，並於(每天下午13:30)舉行叫人鈴操作衛教宣導活動
+4. 落實長輩(每天10:30)進行健康操踢腿運動10下，以及(每週五下午)進行踢球運動以強化下肢運動功能
+5. (　年　月)機構內部會議中，說明(前季跌倒發生密度數據)，工作人員共同注意此議題
+（依事件實況可擇加入：由復健師協助評估目前使用輔具是否正確 / 由復健師評估住民肌力及關節狀況給予合宜復健治療 / 監測住民用藥情形如降血壓或降血糖藥物 / 跌倒住民列入當月分析及改善）`,
+        check:
+`1. 已經於(　年　月　日)完成住民跌倒事件探討及分析，(前季跌倒發生密度總平均為X.XX%，未超過閾值:X.XX%)；分析住民發生跌倒共N件，其中主要為住民之健康狀況因素以至於跌倒，占所有原因X%。進一步分析原因：（具體分析，如雙下肢乏力導致跌倒、未使用叫人鈴自行下床等），故再次提醒長輩使用叫人鈴，並加強住民健康照護及下肢訓練強化肌力，預防進一步傷害發生
+2. (　年　月　日)起每天晨會交班由夜班照服員報告為高危險跌倒住民，加強探視住民生活照顧；(　/　~　/　)護理長實際抽測晨會交班(N次)，交班完成率達X%
+3. (　年　月　日)前已經落實完成檢查所有住房(N床)叫人鈴功能正常，並由照服組長協助於(　/　)調查全部住民是否會使用叫人鈴及使用時機，(完成率達X%)，並且護理長實際(於　/　~　/　)觀察同仁(每日下午13:30茶時間)，衛教住民如何正確使用叫人鈴，住民回覆示教良好，達成率X%
+4. (　年　月　日~　月　日)落實長輩每天10:30分進行健康操踢腿運動10下，以及落實每週五下午進行踢球運動以強化下肢運動功能，施行率達X%
+5. (　年　月　日)機構內部會議中已說明：前季跌倒發生密度數據與分析結論（覆述第1點重點）`,
+        act:
+`經由落實交班，加強下肢活動訓練，於　年　月　日監測分析跌倒事件率比率X.XX%，已達成<X.XX%，續執行住民預防跌倒作業程序規範。`
+      },
+
+      // -------------------- 住院 --------------------
+      hospitalization: {
+        pointHint: 'Plan 9 點 / Do 9 點 / Check 9 點 / Act 1 點',
+        plan:
+`1. 預於(　年　月　日)前完成非計畫性至急性醫院住院事件探討與分析
+2. 預於(　年　月　日)前落實住民、訪客及工作人員每日體溫監測
+3. 預(　月底前)完成稽核護理同仁抽痰護理技術
+4. 預(　月底前)完成稽核單位同仁洗手正確性及遵從性技術
+5. 落實環境清潔及(　月底前)稽核漂白水泡製正確性
+6. 預(　月底前)落實稽核特別口腔護理
+7. 完成住民流感疫苗施打率(>85%)以及工作人員疫苗施打率(>95%)
+8. 機構會議說明注意事項
+9. 預於(　/　/　)非計畫至急性醫院住院比率（<6.0%）`,
+        do:
+`1. (　年　月　日)安排護理長、護理師、照服組長以及照服員2位確認並完成非計畫性至急性醫院住院事件探討與分析，所有工作人員共同發現問題
+2. (　年　月　日)護理長時機抽查確實執行住民、訪客及工作人員體溫監測
+3. (　年　月　日)前護理長實際稽核護理同仁抽痰護理技術
+4. (　/　/　~　/　)晨間交班時護理長宣導及稽核洗手正確性及重要性
+5. (　/　/　~　/　)前護理長宣導及稽核每日環境清潔；並稽核同仁正確漂白水泡製
+6. (　/　/　~　/　晨間交班)時護理長宣導特別口腔護理重要性，並實際稽核同仁特別口腔護理
+7. (　/　/　~　/　)衛教長輩及家屬、員工流感疫苗鼓勵措施，並落實完成(住民流感施打率85%以及工作人員疫苗施打率90%)
+8. (　年　月　日)單位會議中說明(前季非計畫性至急性醫院住院平均比率:X.X%)，再次提醒工作人員注意
+9. 單位護理品質監測人員，持續監測非計畫性轉至急性醫院住院比率`,
+        check:
+`1. 已經於(　年　月　日)討論分析:(前季非計畫性至急性醫院住院平均比率:X.X%)；其中本季共有N例感染事件，然而在感染事件分析中：呼吸道感染(含下呼吸道)共有N例，分析原因:（具體分析），故呼吸道感染(含下呼吸道)總平均發生密度:X.XX‰；另有N例是因為泌尿道感染，泌尿道感染發生密度X.XX‰，使用存留尿管的泌尿道感染發生密度X.XX‰，未使用存留尿管的泌尿道感染發生密度X.XX‰；泌尿道感染，分析原因多是長期臥床且尿管留置，需加強會陰沖洗正確性以及加強抽痰
+2. (　/　/　~　/　)護理長查核所有住民體溫單、訪客體溫登記單以及所有工作人員體溫表確實執行體溫監測並且記錄，(達成率100%)
+3. (　年　月　日)護理長實際稽核護理工作同仁抽痰護理技術，全員通過正確(完成率達100%)
+4. (　/　/　~　/　)晨間交班時護理長宣導洗手正確性及遵從性，(　/　前)護理長實際稽核全體工作人員洗手技術，全員通過洗手(正確率平均:X.X%)、(洗手遵從完成率達X%)
+5. (　/　/　~　/　)護理長宣導每日環境清潔的重要性並於每日實際稽核住民環境清潔是否落實，並於稽核表單簽章，(達成率100%)；並於(　/　~　/　)運用實際觀察稽核N位同仁正確漂白水泡製，全體員工平均分數X分，通過完成率達X%
+6. (　/　/　~　/　)晨間交班時護理長宣導特別口腔護理重要性，(達成率X%)，並實際抽測照服工作人員N人次特別口腔護理，通過完成率達X%
+7. (　/　/　~　/　)張貼施打流感疫苗鼓勵措施，並實際電聯家屬施打流感疫苗鼓勵措施，(　/　落實完成住民流感疫苗施打率X%以及工作人員疫苗施打率X%)
+8. (　年　月　日)單位會議中已說明前季數據與分析結論（覆述第1點重點）
+9. (　年　月　日)非計畫性至急性醫院住院比率:X.XX%，未超過閾值6.0%`,
+        act:
+`經由落實執行手部清潔，適時稽核相關技術，於　年　月，非計畫性至急性醫院住院比例可降低至X.X%，續執行標準作業程序規範。`
+      },
+
+      // -------------------- 感染 --------------------
+      infection: {
+        pointHint: 'Plan 10 點 / Do 10 點 / Check 9–10 點 / Act 1 點',
+        plan:
+`1. 預於(　年　月　日)前完成事件探討與分析
+2. 預於(　年　月　日)前落實住民、訪客及工作人員每日體溫監測
+3. 預(　月底)前完成稽核護理同仁抽痰護理技術
+4. 預(　月底)前完成稽核全體同仁洗手技術
+5. 落實工作人員環境清潔及(　月底)前稽核漂白水泡製正確
+6. 預(　月底前)落實稽核特別口腔護理
+7. 完成(住民流感疫苗施打率>85%以及工作人員疫苗施打率>90%)
+8. (　年　月　日總感染發生密度<2.6‰)
+9. (重新修訂隔離相關措施)
+10. (機構會議時說明注意事項)
+（依事件實況可擇加入：完成稽核同仁私密處清潔技術 / 完成稽核同仁拍痰技術）`,
+        do:
+`1. (　年　月　日)安排護理長、護理師、照服組長以及照服員2位確認並完成前季總感染發生事件探討與分析
+2. (　年　月　日)護理長時機抽查確實執行住民、訪客及工作人員體溫監測
+3. (　年　月　日)前護理長實際稽核護理師抽痰護理技術
+4. (　/　/　~　/　)晨間交班護理長宣導及稽核洗手正確性及重要性
+5. (　年　月　日)前護理長宣導及稽核每日環境清潔；並稽核同仁正確漂白水泡製
+6. (　/　/　~　/　)晨間交班時護理長宣導特別口腔護理重要性，並實際稽核同仁特別口腔護理
+7. (　/　/　~　/　)衛教長輩及家屬、員工流感疫苗鼓勵措施，(並落實完成住民流感疫苗施打率85%以及工作人員疫苗施打率90%)
+8. 每月單位護理品質監測人員，持續監測總感染發生密度
+9. (　年　月　日前完成修訂隔離相關措施)
+10. (　年　月)機構會議中說明前季總感染發生密度
+（依事件實況可擇加入：未限水住民由照服員定時定量給水1500-2000ml / 每2小時檢查尿布尿濕情形主動更換尿布及會陰部護理 / 必要時協助更換尿管或尿袋 / 皮膚出現異常採取保護性隔離 / 上呼吸道問題時採保護性隔離協助戴口罩及就醫）`,
+        check:
+`1. (已經於　年　月　日確認前季總感染發生密度:X.XX‰；其中本季共有N例感染事件，然而在感染事件分析中：呼吸道感染(含下呼吸道)共有N例，其中N例是A型流感，進一步分析原因發現（具體分析），其中確診個案有N例未施打流感疫苗，而下呼吸道感染共N例，原因為肺纖維化、本身疾病反覆性肺炎感染、長期臥床痰液黏稠不易自咳，呼吸道感染(含下呼吸道)總平均發生密度:X.XX‰；另N例泌尿道感染，泌尿道感染發生密度X.XX‰，留管X.XX‰、未留管X.XX‰；泌尿道感染原因多是長期臥床且尿管留置，需加強會陰沖洗正確性；另N例皮膚/疥瘡感染，疥瘡感染發生密度:X.XX‰，進行後續隔離以及重新修訂隔離相關措施及落實洗手五時機)
+2. (　/　/　~　/　)護理長查核所有住民體溫單、訪客體溫登記單以及所有工作人員體溫表確實執行體溫監測並且記錄，(達成率100%)
+3. (　年　月　日)前護理長實際稽核護理工作同仁抽痰護理技術，全員通過(正確完成率達100%)
+4. (　/　/　~　/　)晨間交班時護理長宣導洗手正確性及重要性，(　/　前)護理長實際稽核全體工作人員洗手技術，全員通過正確化(完成率達X%)
+5. (　/　/　~　/　)護理長宣導每日環境清潔重要性並於每日實際稽核住民環境清潔是否落實，並於稽核表單簽章，(達成率100%)；並於(　/　~　/　)實際觀察稽核N位同仁正確漂白水泡製，全體員工平均X分，通過完成率達X%
+6. (　/　/　~　/　)晨間交班時護理長宣導特別口腔護理重要性，(達成率X%)，並實際抽測照服工作人員N人次特別口腔護理，通過完成率達X%
+7. (　/　/　~　/　)張貼施打流感疫苗鼓勵措施，並實際電聯家屬施打流感疫苗鼓勵措施，(　/　落實完成住民流感疫苗施打率X%以及工作人員疫苗施打率X%)
+8. 已經於(　年　月份)單位護理品質監測人員，持續監測總感染發生密度(X.XX < 2.6‰)
+9. (　年　月　日)機構會議說明前季總感染發生密度與分析結論（覆述第1點重點），本季預防感染為重點，工作人員共同注意此議題`,
+        act:
+`經由落實執行手部清潔，適時稽核相關技術，於　年　月，總感染比例可降低至X.X%，續執行住民預防感染作業程序規範。`
+      },
+
+      // -------------------- 壓傷（沿用公用 SOP 版，留 ___ 空白）--------------------
+      pressure_ulcer: {
+        pointHint: 'Plan 13 點 / Do 10 點 / Check 9 點 / Act 8 點（壓傷風格較為通用 SOP，若事件清單未提供具體數據，請保留 ___ 留白由人工事後補上）',
+        plan:
+`1. 每日於交班時提醒照護人員高危險群住民之巡視皮膚情形及翻身
+2. 製作「正確翻身擺位姿勢提醒卡」— 提醒工作人員及家屬正確位置和翻身注意事項
+3. 護理人員應督責照護人員執行防範壓瘡之措施
+4. 定期每兩小時協助住民翻身，檢視皮膚狀況，出現異常時應立即通報
+5. 護理人員每日換藥，並填寫傷口紀錄單
+6. 護理人員每___週___拍照，確認傷口癒合程度
+7. 針對壓瘡傷口狀況不佳之住民，給予換藥一天兩次或多次
+8. 安排壓瘡之在職教育，讓所有工作人員對於壓皮膚評估及壓瘡照護重要性及必要性
+9. 已有壓瘡住民應協助於翻身時或活動時避開其傷口處，保持傷口乾燥
+10. 翻身時應輕柔避免住民翻身時拖拉造成傷口加劇
+11. 在職教育介紹皮膚疾病之概念，落實皮膚評估之概念
+12. 確實執行翻身擺位紀錄表，並與翻身位置相同
+13. 針對有傷口的住民，必要時照會營養師，協助訪視是否需增加配方`,
+        do:
+`1. 預定　年　月　日稽核是否有確實填寫翻身擺位之照護記錄，並正確執行該技術
+2. 預定　年　月　日完成新入住住民於72小時完成正確翻身擺位姿勢提醒卡，並設有其他國籍之版本
+3. 晨間會議及交班中由主管定時稽核人員之正確之翻身擺位技巧
+4. 預定　年　月　日稽核人員確認是否有每日或必要時更換傷口
+5. 預定　年　月　日執行翻身拍背技術考核
+6. 預定　年　月　日執行壓瘡之在職教育
+7. 預定　年　月　日執行皮膚疾病之介紹在職教育
+8. 預定　年　月　日修訂品質監測指標做持續性監測
+9. 預定　年　月　日落實營養師訪視住民，評估是否需要增加配方
+10. 預定　年　月　日稽核人員在更換傷口時是否採正確換藥方式，如：無菌技術`,
+        check:
+`1. 壓瘡品質監測指標做持續性監測
+2. 　年　月　日完成稽核照護人員之照顧技巧，即時檢討改善，並給予必要時床邊衛教
+3. 　年　月　日前完成稽核照服員翻身擺位技術，並確實執行每兩小時翻身拍背，若持續仍未達到正確翻身拍背，應加強在職教育，如：每三個月一次在職教育
+4. 確實執行每日傷口及瘡傷護理壓，採正確無菌原則
+5. 針對有壓瘡住民應兩小時或必要時協助翻身，給予使用翻身枕支托
+6. 確實每日記錄傷口癒合過程，以便回診就醫時提供相關資料供醫師了解治療狀況
+7. 持續監測營養評估，營養師訪視會針對有必要之狀況給予補充特殊配方，促進傷口癒合
+8. 確實執行每三個月評估每位住民肢體活動，如：ADL、IADL，評估翻身及肢體擺位之需求，避免造成壓瘡
+9. 若持續肢體攣縮影響壓瘡癒合，應請復健師評估正確翻身擺位`,
+        act:
+`1. 確實執行壓瘡危險因子評估：針對長期臥床之高危險住民，加強注意預防壓瘡情形
+2. 高危險壓瘡之住民應加強檢視皮膚狀況
+3. 護理人員在職教育：加強護理人員壓瘡判別之分級知識，避免誤判，以正確收案及評估
+4. 在職教育所有工作人員住民翻身及扣背技巧，並了解其重要性
+5. 提升皮膚評估及翻身措施品質，執行標準手冊，且應實務狀況即時檢討更新
+6. 每一季持續保持平均壓瘡點盛行率≤___%
+7. 每班應執行皮膚檢視及變化，出現異常時工作人員應立即通報
+8. 定期正確評估壓瘡狀況協助拍照，書寫護理紀錄，以便建立傷口變化`
+      }
+    };
+
+    // 取得指定模式的樣板段落，回傳 plan/do/check/act 四欄
+    function getPdcaStyleTemplate(mode) {
+      return PDCA_STYLE_TEMPLATES[mode] || PDCA_STYLE_TEMPLATES.fall;
+    }
+
+    // =====================================================================
+    // 閾值設定指標表（依機構「年度閾值設定」頁面挖出之 61 項品質指標）
+    // 每項預設值取自機構截圖；avg=去年平均、th=閾值，使用者可於彈窗中修改
+    // =====================================================================
+    const THRESHOLD_CONFIG = [
+      { id:'hosp', group:'非計畫性住院指標', unit:'%', items:[
+        {key:'hosp_BA',  label:'入住72小時內非計畫性住院比率(B/A)', avg:'10', th:'8'},
+        {key:'hosp_EC',  label:'轉至醫院住院比率(E/C)', avg:'5.77', th:'5.0'},
+        {key:'hosp_EF',  label:'轉至醫院住院密度(E/F)', avg:'0.21', th:'0.18'},
+        {key:'hosp_DC',  label:'非計畫性住院比率(D/C)', avg:'0', th:'0'},
+        {key:'hosp_D1H', label:'因心血管代償機能減退而非計畫轉進醫院比率(D1/H)', avg:'12.4', th:'10'},
+        {key:'hosp_D2H', label:'因骨折而非計畫轉進醫院比率(D2/H)', avg:'0', th:'0'},
+        {key:'hosp_D3H', label:'因腸胃道出血而非計畫轉進醫院比率(D3/H)', avg:'1.39', th:'1.0'},
+        {key:'hosp_D4H', label:'因感染而非計畫轉進醫院比率(D4/H)', avg:'41.57', th:'35'},
+        {key:'hosp_D5H', label:'其他內外科原因而非計畫轉進醫院比率(D5/H)', avg:'44.64', th:'40'},
+        {key:'hosp_IH',  label:'非計畫性住院者之重複住院率(I/H)', avg:'0', th:'0'},
+      ]},
+      { id:'restraint', group:'約束指標', unit:'%', items:[
+        {key:'res_CA',  label:'身體約束發生密度(C/A)', avg:'36.2', th:'36.0'},
+        {key:'res_C1B', label:'為預防跌倒而使用約束比率(C1/B)', avg:'42.86', th:'42'},
+        {key:'res_C2B', label:'為預防管路自拔而使用約束比率(C2/B)', avg:'47.36', th:'45'},
+        {key:'res_C3B', label:'為預防自傷而使用約束比率(C3/B)', avg:'2.9', th:'2.5'},
+        {key:'res_C4B', label:'為行為紊亂而使用約束比率(C4/B)', avg:'6.88', th:'6.5'},
+        {key:'res_C5B', label:'為協助治療而使用約束比率(C5/B)', avg:'0', th:'0'},
+        {key:'res_C6B', label:'為其他因素而使用約束比率(C6/B)', avg:'0', th:'0'},
+        {key:'res_DB',  label:'多重身體約束比率(D/B)', avg:'32.57', th:'30'},
+        {key:'res_HB',  label:'當月約束移除成功率(H/B)', avg:'5.84', th:'5'},
+      ]},
+      { id:'fall', group:'跌倒指標', unit:'%', items:[
+        {key:'fall_BA',  label:'當月跌倒發生密度(B/A)', avg:'0.03', th:'0'},
+        {key:'fall_B1B', label:'因健康狀況跌倒率(B1/B)', avg:'41.67', th:'38'},
+        {key:'fall_B2B', label:'因治療及藥物反應跌倒率(B2/B)', avg:'0', th:'0'},
+        {key:'fall_B3B', label:'因環境跌倒率(B3/B)', avg:'25', th:'20'},
+        {key:'fall_B4B', label:'因其他因素跌倒率(B4/B)', avg:'0', th:'0'},
+        {key:'fall_CB',  label:'跌倒造成傷害率(C/B)', avg:'62.5', th:'60'},
+        {key:'fall_C1C', label:'當月跌倒1級傷害率(C1/C)', avg:'36.11', th:'35'},
+        {key:'fall_C2C', label:'當月跌倒2級傷害率(C2/C)', avg:'30.56', th:'28'},
+        {key:'fall_C3C', label:'當月跌倒3級傷害率(C3/C)', avg:'0', th:'0'},
+        {key:'fall_DB0', label:'重覆跌倒者佔跌倒者之比例(D/B0)', avg:'4.17', th:'3.5'},
+      ]},
+      { id:'infection', group:'感染指標', unit:'‰', items:[
+        {key:'inf_BA',   label:'總感染發生密度(B/A)', avg:'1.03', th:'0.8'},
+        {key:'inf_CA',   label:'呼吸道感染發生密度(C/A)', avg:'0.83', th:'0.7'},
+        {key:'inf_C1A',  label:'下呼吸道感染發生密度(C1/A)', avg:'0.6', th:'0.5'},
+        {key:'inf_DA',   label:'泌尿道感染發生密度(D/A)', avg:'0.11', th:'0.08'},
+        {key:'inf_D5D1', label:'使用存留導尿管的泌尿道感染發生密度(D5/D1)', avg:'0.13', th:'0.1'},
+        {key:'inf_D6D2', label:'未使用存留導尿管的泌尿道感染發生密度(D6/D2)', avg:'0.12', th:'0.1'},
+        {key:'inf_EA',   label:'皮膚感染發生密度(E/A)', avg:'0.09', th:'0.07'},
+        {key:'inf_FA',   label:'疥瘡感染發生密度(F/A)', avg:'0.03', th:'0.02'},
+        {key:'inf_GA',   label:'皮膚及軟組織感染(蜂窩性組織炎/軟組織/傷口感染)發生密度(G/A)', avg:'0.06', th:'0.05'},
+        {key:'inf_HA',   label:'腸胃道感染發生密度(H/A)', avg:'0', th:'0'},
+        {key:'inf_IA',   label:'眼耳鼻感染發生密度(I/A)', avg:'0', th:'0'},
+        {key:'inf_JA',   label:'血液感染發生密度(J/A)', avg:'0', th:'0'},
+        {key:'inf_KA',   label:'新興傳染病發生密度(K/A)', avg:'0', th:'0'},
+      ]},
+      { id:'pressure', group:'壓傷指標', unit:'%', items:[
+        {key:'pu_BA',  label:'壓傷點盛行率(B/A)', avg:'7.55', th:'6.5'},
+        {key:'pu_C1A', label:'一級壓傷點盛行率(C1/A)', avg:'1.67', th:'1.5'},
+        {key:'pu_C2A', label:'二級壓傷點盛行率(C2/A)', avg:'2.72', th:'2.5'},
+        {key:'pu_C3A', label:'三級壓傷點盛行率(C3/A)', avg:'2.9', th:'2.5'},
+        {key:'pu_C4A', label:'四級壓傷點盛行率(C4/A)', avg:'0.26', th:'0.25'},
+        {key:'pu_C5A', label:'無法分級壓傷點盛行率(C5/A)', avg:'0', th:'0'},
+        {key:'pu_C6A', label:'深部組織壓傷點盛行率(C6/A)', avg:'0', th:'0'},
+        {key:'pu_C7A', label:'其他(黏膜層)壓傷點盛行率(C7/A)', avg:'0', th:'0'},
+        {key:'pu_DC',  label:'壓力性損傷發生密度(D/C)', avg:'0', th:'0', unit:'‰'},
+      ]},
+      { id:'weight', group:'非計畫性體重改變', unit:'%', items:[
+        {key:'wt_BA',   label:'非計畫性體重減輕(B/A)', avg:'0', th:'0'},
+        {key:'wt_CA',   label:'非計畫性體重增加(C/A)', avg:'0', th:'0'},
+        {key:'wt_B1A1', label:'非計畫性3個月體重減輕(B1/A1)', avg:'0', th:'0'},
+        {key:'wt_C1A1', label:'非計畫性3個月體重增加(C1/A1)', avg:'0', th:'0'},
+        {key:'wt_B2A2', label:'非計畫性6個月體重減輕(B2/A2)', avg:'0', th:'0'},
+        {key:'wt_C2A2', label:'非計畫性6個月體重增加(C2/A2)', avg:'0', th:'0'},
+      ]},
+      { id:'ng', group:'鼻胃管移除', unit:'%', items:[
+        {key:'ng_CA', label:'鼻胃管訓練成功率(C/A)', avg:'20.14', th:'20'},
+        {key:'ng_DB', label:'鼻胃管移除率(D/B)', avg:'1', th:'1'},
+      ]},
+      { id:'urinary', group:'尿管移除', unit:'%', items:[
+        {key:'ur_CA', label:'尿管訓練成功率(C/A)', avg:'23.33', th:'20'},
+        {key:'ur_DB', label:'尿管移除率(D/B)', avg:'2.69', th:'3'},
+      ]},
+    ];
+
+    // 由 THRESHOLD_CONFIG 預設值建立初始閾值資料
+    function buildDefaultThresholdData() {
+      const d = {};
+      THRESHOLD_CONFIG.forEach(g => g.items.forEach(it => {
+        d[it.key] = { avg: it.avg || '', th: it.th || '' };
+      }));
+      return d;
+    }
+
+    // 將閾值資料序列化成 AI prompt 可讀文字（只輸出有填值的項目）
+    function serializeThresholds() {
+      const lines = [];
+      THRESHOLD_CONFIG.forEach(g => {
+        const gLines = [];
+        g.items.forEach(it => {
+          const d = (pdcaThresholdData && pdcaThresholdData[it.key]) || {};
+          const avg = (d.avg ?? '').toString().trim();
+          const th = (d.th ?? '').toString().trim();
+          if (avg !== '' || th !== '') {
+            const u = it.unit || g.unit || '';
+            gLines.push(`  - ${it.label}：去年平均 ${avg !== '' ? avg + u : '—'}，閾值 ${th !== '' ? th + u : '—'}`);
+          }
+        });
+        if (gLines.length) { lines.push(`【${g.group}】`); lines.push(...gLines); }
+      });
+      return lines.join('\n');
+    }
+
+    let currentTab = 'add-event';
+    let currentApiVersion = 'v4.0';
+    let currentEventMode = 'fall';
+    let currentPdcaEventMode = 'fall';
+    let uploadedFiles = [];
+    let pdcaUploadedFiles = [];
+    let selectionsData = {};
+    let manualInputsData = {}; 
+    let currentEventResult = null;
+    let currentPdcaResult = null;
+    let currentPdcaAnalysis = null;
+    let pdcaThresholdData = {};
+    // 重新生成的復原堆疊（key = 欄位名；value = 該欄位歷次舊內容陣列）
+    let regenHistory = {};
+
+    window.onload = async function() {
+      const wardSelect = document.getElementById('login-ward');
+      WARD_LIST.forEach(ward => { const opt = document.createElement('option'); opt.value = ward; opt.innerText = wardDisplay(ward); wardSelect.appendChild(opt); });
+      setDefaultQuarterDates();
+
+      // 已關閉自動登入：每次開啟都需手動選機構＋輸入密碼。
+      // 一併清除任何殘留的登入狀態與舊密碼快取（避免免密碼進入）。
+      localStorage.removeItem('careai_logged_in_ward');
+      WARD_LIST.forEach(w => localStorage.removeItem(`careai_pwd_${w}`));
+    };
+
+    window.setDefaultQuarterDates = function() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const quarter = Math.floor(now.getMonth() / 3);
+      const startDate = new Date(year, quarter * 3, 1);
+      const endDate = new Date(year, (quarter + 1) * 3, 0); 
+      const formatDate = (date) => `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
+      document.getElementById('pdca-start-date').value = formatDate(startDate);
+      document.getElementById('pdca-end-date').value = formatDate(endDate);
+    };
+
+    // ----------------------------------------------------------------------
+    // 登入、登出與密碼修改
+    // ----------------------------------------------------------------------
+    window.handleLogin = async function() {
+      const ward = document.getElementById('login-ward').value;
+      const pwdInput = document.getElementById('login-pwd').value;
+      const btnIcon = document.getElementById('login-btn-icon');
+      const btnText = document.getElementById('login-btn-text');
+      const btn = document.getElementById('login-btn');
+
+      btn.disabled = true;
+      btnIcon.className = "ph ph-spinner animate-spin text-xl";
+      btnText.innerText = "驗證中...";
+
+      try {
+        const gasUrl = getGasUrl(ward);
+        const res = await fetchWithRetry(gasUrl, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'verifyPassword', ward: ward, password: pwdInput }),
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+        });
+        if (!res) throw new Error("無回應");
+        const resData = await res.json();
+
+        if (resData.status === 'success') {
+          // 已關閉自動登入，不再儲存明碼密碼
+          window.handleLoginSilent(ward);
+        } else {
+          alert(resData.message || '登入失敗！');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('無法連線到資料庫，請檢查網路或 GAS 網址設定。');
+      } finally {
+        btn.disabled = false;
+        btnIcon.className = "ph ph-sign-in text-xl";
+        btnText.innerText = "進入系統";
+      }
+    };
+
+    window.handleLoginSilent = async function(ward) {
+      currentLoggedWard = ward;
+      localStorage.setItem('careai_logged_in_ward', ward);
+      document.getElementById('sidebar-ward-display').innerText = wardDisplay(ward) + '護理站';
+      document.getElementById('login-view').classList.add('opacity-0', 'pointer-events-none');
+      setTimeout(() => document.getElementById('login-view').classList.add('hidden'), 300);
+
+      document.getElementById('setting-gas-url').value = getGasUrl();
+      document.getElementById('setting-current-measures').value = localStorage.getItem(`careai_measures_${ward}`) || '';
+      document.getElementById('setting-available-tools').value = localStorage.getItem(`careai_tools_${ward}`) || '';
+      document.getElementById('setting-staffing-family').value = localStorage.getItem(`careai_staffing_${ward}`) || '';
+
+      // 載入閾值設定（JSON 結構；無資料時以截圖預設值帶入）
+      try {
+        const savedTh = localStorage.getItem(`careai_threshold_${ward}`);
+        const parsed = savedTh ? JSON.parse(savedTh) : null;
+        pdcaThresholdData = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : buildDefaultThresholdData();
+      } catch(e) { pdcaThresholdData = buildDefaultThresholdData(); }
+      updateThresholdStatus();
+
+      setDefaultQuarterDates();
+      startNewEvent(); 
+      startNewPDCA(); 
+      
+      setTimeout(async () => {
+        try {
+          await fetchEventsFromCloud();
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          await fetchPDCAFromCloud();
+          await fetchThresholdFromCloud();
+        } catch (err) {
+          console.warn("部分雲端資料同步可能不穩定，以目前載入資料為主", err);
+        }
+      }, 100);
+    };
+
+    window.handleLogout = function() {
+      localStorage.removeItem('careai_logged_in_ward');
+      currentLoggedWard = null;
+      document.getElementById('login-pwd').value = '';
+      document.getElementById('login-view').classList.remove('hidden', 'pointer-events-none', 'opacity-0');
+      closeSettingsModal();
+    };
+
+    window.handleChangePassword = async function() {
+      const newPwd = document.getElementById('setting-new-pwd').value.trim();
+      if (!newPwd || newPwd.length < 4) return alert('密碼長度至少需 4 碼');
+
+      const btn = document.getElementById('change-pwd-btn');
+      const originalText = btn.innerText;
+      btn.innerText = "處理中...";
+      btn.disabled = true;
+
+      try {
+        const gasUrl = getGasUrl();
+        const res = await fetchWithRetry(gasUrl, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'updatePassword', ward: currentLoggedWard, newPassword: newPwd }),
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+        });
+        if (!res) throw new Error("無回應");
+        const resData = await res.json();
+
+        if (resData.status === 'success') {
+          document.getElementById('setting-new-pwd').value = '';
+          showToast('密碼變更成功！已同步至雲端資料庫。');
+        } else {
+          alert(resData.message || '變更失敗！');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('無法連線到資料庫修改密碼。');
+      } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+      }
+    };
+
+    // ================= 雲端資料同步 =================
+    window.fetchEventsFromCloud = async function() {
+      const gasUrl = getGasUrl();
+      try {
+        const res = await fetchWithRetry(gasUrl, { method: 'POST', body: JSON.stringify({ action: "getEvents", ward: currentLoggedWard }), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+        if(!res) return;
+        const resData = await res.json();
+        if(resData.status === 'success') {
+          cloudEventsList = Array.isArray(resData.data) ? resData.data : [];
+          filterPDCAEvents();
+        }
+      } catch(e) { console.error("抓取雲端事件資料失敗", e); }
+    }
+
+    window.fetchPDCAFromCloud = async function() {
+      const gasUrl = getGasUrl();
+      try {
+        const res = await fetchWithRetry(gasUrl, { method: 'POST', body: JSON.stringify({ action: "getPDCA", ward: currentLoggedWard }), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+        if(!res) return;
+        const resData = await res.json();
+        if(resData.status === 'success') {
+          cloudPdcaList = Array.isArray(resData.data) ? resData.data : [];
+        }
+      } catch(e) { console.error("抓取雲端 PDCA 資料失敗", e); }
+    }
+
+    // 從雲端讀取閾值設定（後端若未支援 getThreshold 會自動忽略，改用本機值）
+    window.fetchThresholdFromCloud = async function() {
+      const gasUrl = getGasUrl();
+      try {
+        const res = await fetchWithRetry(gasUrl, { method: 'POST', body: JSON.stringify({ action: "getThreshold", ward: currentLoggedWard }), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+        if(!res) return;
+        const resData = await res.json();
+        if(resData.status === 'success' && resData.threshold) {
+          let obj = resData.threshold;
+          if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch(e) { obj = null; } }
+          if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+            pdcaThresholdData = obj;
+            localStorage.setItem(`careai_threshold_${currentLoggedWard}`, JSON.stringify(pdcaThresholdData));
+            updateThresholdStatus();
+          }
+        }
+      } catch(e) { console.warn("抓取雲端閾值失敗，使用本機值", e); }
+    }
+
+    // ================= 閾值設定彈窗 =================
+    window.openThresholdModal = function() {
+      renderThresholdForm();
+      document.getElementById('threshold-modal').classList.replace('hidden', 'flex');
+    };
+    window.closeThresholdModal = function() {
+      document.getElementById('threshold-modal').classList.replace('flex', 'hidden');
+    };
+
+    function renderThresholdForm() {
+      const c = document.getElementById('threshold-form-container');
+      if (!c) return;
+      c.innerHTML = THRESHOLD_CONFIG.map(g => `
+        <div class="mb-5">
+          <h4 class="text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><i class="ph ph-bookmark-simple text-amber-500"></i>${g.group}</h4>
+          <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div class="grid grid-cols-[1fr_92px_92px] gap-2 px-3 py-2 bg-slate-100 text-xs font-bold text-slate-500">
+              <div>指標項目</div><div class="text-center">去年平均</div><div class="text-center">閾值</div>
+            </div>
+            ${g.items.map(it => {
+              const d = (pdcaThresholdData && pdcaThresholdData[it.key]) || {};
+              const u = it.unit || g.unit || '';
+              const av = (d.avg ?? '').toString().replace(/"/g, '&quot;');
+              const tv = (d.th ?? '').toString().replace(/"/g, '&quot;');
+              return `<div class="grid grid-cols-[1fr_92px_92px] gap-2 px-3 py-1.5 border-t border-slate-100 items-center">
+                <div class="text-xs text-slate-600 leading-snug">${it.label}</div>
+                <div class="flex items-center gap-0.5"><input type="text" data-thkey="${it.key}" data-thfield="avg" value="${av}" class="w-full px-1.5 py-1 border border-slate-200 rounded text-xs text-right focus:outline-none focus:ring-1 focus:ring-amber-400"><span class="text-[10px] text-slate-400 w-3">${u}</span></div>
+                <div class="flex items-center gap-0.5"><input type="text" data-thkey="${it.key}" data-thfield="th" value="${tv}" class="w-full px-1.5 py-1 border border-amber-200 bg-amber-50/50 rounded text-xs text-right focus:outline-none focus:ring-1 focus:ring-amber-400"><span class="text-[10px] text-slate-400 w-3">${u}</span></div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function collectThresholdForm() {
+      const data = {};
+      document.querySelectorAll('#threshold-form-container input[data-thkey]').forEach(inp => {
+        const k = inp.dataset.thkey, f = inp.dataset.thfield;
+        if (!data[k]) data[k] = { avg: '', th: '' };
+        data[k][f] = inp.value.trim();
+      });
+      return data;
+    }
+
+    function updateThresholdStatus() {
+      const el = document.getElementById('threshold-status');
+      if (!el) return;
+      let total = 0, filled = 0;
+      THRESHOLD_CONFIG.forEach(g => g.items.forEach(it => {
+        total++;
+        const d = (pdcaThresholdData && pdcaThresholdData[it.key]) || {};
+        if ((d.th ?? '').toString().trim() !== '') filled++;
+      }));
+      el.innerHTML = `<i class="ph ph-check-circle text-emerald-500"></i> 已設定 <b>${filled}</b> / ${total} 項閾值`;
+    }
+
+    // 儲存閾值設定（本機 + 雲端 Google Sheet）
+    window.saveThresholdModal = async function() {
+      pdcaThresholdData = collectThresholdForm();
+      localStorage.setItem(`careai_threshold_${currentLoggedWard}`, JSON.stringify(pdcaThresholdData));
+      updateThresholdStatus();
+
+      const btn = document.getElementById('save-threshold-modal-btn');
+      const original = btn ? btn.innerHTML : '';
+      if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ph ph-spinner animate-spin"></i> 儲存中...'; }
+      try {
+        const gasUrl = getGasUrl();
+        const res = await fetchWithRetry(gasUrl, {
+          method: 'POST',
+          body: JSON.stringify({ action: "saveThreshold", ward: currentLoggedWard, threshold: JSON.stringify(pdcaThresholdData), timestamp: new Date().toLocaleString('zh-TW') }),
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+        });
+        if (res) {
+          const resData = await res.json().catch(() => ({}));
+          if (resData.status === 'success') showToast('閾值已儲存並同步至雲端 Google Sheet！');
+          else showToast('閾值已存本機（雲端後端尚未支援 saveThreshold）');
+        } else {
+          showToast('閾值已存本機（雲端無回應）');
+        }
+      } catch(e) {
+        console.warn('閾值雲端同步失敗', e);
+        showToast('閾值已存本機（雲端同步失敗）');
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = original; }
+        closeThresholdModal();
+      }
+    };
+
+    // ================= 設定彈窗 =================
+    window.openSettingsModal = function() {
+      document.getElementById('setting-gas-url').value = getGasUrl();
+      document.getElementById('setting-current-measures').value = localStorage.getItem(`careai_measures_${currentLoggedWard}`) || '';
+      document.getElementById('setting-available-tools').value = localStorage.getItem(`careai_tools_${currentLoggedWard}`) || '';
+      document.getElementById('setting-staffing-family').value = localStorage.getItem(`careai_staffing_${currentLoggedWard}`) || '';
+      document.getElementById('settings-modal').classList.replace('hidden', 'flex');
+    };
+    window.closeSettingsModal = function() { document.getElementById('settings-modal').classList.replace('flex', 'hidden'); };
+    window.saveAndCloseSettings = function() {
+      if(!currentLoggedWard) return;
+      localStorage.setItem(`careai_gas_url_${currentLoggedWard}`, document.getElementById('setting-gas-url').value.trim());
+      localStorage.setItem(`careai_measures_${currentLoggedWard}`, document.getElementById('setting-current-measures').value.trim());
+      localStorage.setItem(`careai_tools_${currentLoggedWard}`, document.getElementById('setting-available-tools').value.trim());
+      localStorage.setItem(`careai_staffing_${currentLoggedWard}`, document.getElementById('setting-staffing-family').value.trim());
+      showToast('設定已儲存！'); closeSettingsModal();
+    };
+
+    // ================= 歷史紀錄 Modal (單一事件) =================
+    window.openHistoryModal = function() {
+        const listContainer = document.getElementById('history-modal-list');
+        if(cloudEventsList.length === 0) {
+            listContainer.innerHTML = `<div class="text-center text-slate-500 py-10 font-bold">雲端目前尚無歷史紀錄</div>`;
+        } else {
+            listContainer.innerHTML = cloudEventsList.slice().reverse().map(evt => `
+                <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col gap-2">
+                    <div class="flex justify-between items-center">
+                        <span class="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded">${evt.saveDate}</span>
+                        <span class="text-sm font-bold text-slate-600">${evt.eventType}</span>
+                    </div>
+                    ${(evt.residentName || evt.bedNumber) ? `<div class="flex items-center gap-2 text-xs"><span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><i class="ph ph-user"></i>${evt.residentName || '—'}</span><span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><i class="ph ph-bed"></i>床號 ${evt.bedNumber || '—'}</span></div>` : ''}
+                    <p class="text-xs text-slate-500 line-clamp-2 mt-1">${evt.deIdentifiedText || evt.rawInputDetails?.rawText || '無摘要'}</p>
+                    <button onclick="loadEventForEditing('${evt.id}')" class="mt-2 w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-sm transition-colors border border-slate-200">
+                        載入並修改此紀錄
+                    </button>
+                </div>
+            `).join('');
+        }
+        document.getElementById('history-modal').classList.replace('hidden', 'flex');
+    };
+    window.closeHistoryModal = function() { document.getElementById('history-modal').classList.replace('flex', 'hidden'); };
+
+    // ================= 歷史紀錄 Modal (PDCA) =================
+    window.openPDCAHistoryModal = function() {
+        const listContainer = document.getElementById('pdca-history-modal-list');
+        if(cloudPdcaList.length === 0) {
+            listContainer.innerHTML = `<div class="text-center text-slate-500 py-10 font-bold">雲端目前尚無歷史報告</div>`;
+        } else {
+            listContainer.innerHTML = cloudPdcaList.slice().reverse().map(pdca => `
+                <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col gap-2">
+                    <div class="flex justify-between items-center">
+                        <span class="bg-teal-100 text-teal-700 text-xs font-bold px-2 py-1 rounded">${pdca.timestamp}</span>
+                        <div class="flex items-center gap-2">
+                            ${pdca.eventTypeLabel ? `<span class="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded">${pdca.eventTypeLabel}</span>` : ''}
+                            <span class="text-sm font-bold text-slate-600">區間: ${pdca.dateRange}</span>
+                        </div>
+                    </div>
+                    <p class="text-xs text-slate-500 line-clamp-2 mt-1">涵蓋 ${pdca.eventsCount} 筆事件</p>
+                    <button onclick="loadPDCAForEditing('${pdca.id}')" class="mt-2 w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-sm transition-colors border border-slate-200">
+                        載入並修改此 PDCA 報告
+                    </button>
+                </div>
+            `).join('');
+        }
+        document.getElementById('pdca-history-modal').classList.replace('hidden', 'flex');
+    };
+    window.closePDCAHistoryModal = function() { document.getElementById('pdca-history-modal').classList.replace('flex', 'hidden'); };
+
+
+    // ================= 表單操作 (單一事件) =================
+    window.startNewEvent = function() {
+        editingEventId = null;
+        currentEventResult = null;
+        uploadedFiles = [];
+        renderEventFileList();
+        ['rootCause', 'improvement', 'followUp'].forEach(f => delete regenHistory[f]);
+        updateUndoButtons();
+        document.getElementById('record-text').value = '';
+        document.getElementById('resident-name').value = '';
+        document.getElementById('resident-bed').value = '';
+        document.getElementById('event-date').value = todayDateStr();
+        document.getElementById('editing-badge').classList.add('hidden');
+        document.getElementById('save-event-btn-text').innerText = "同步儲存至機構雲端與 PDCA 庫";
+        initInputs(currentEventMode);
+        renderFormOptions();
+        renderManualInputs();
+        checkAnalyzeButtonState();
+        updateResultDisplay();
+    };
+
+    window.loadEventForEditing = function(id) {
+        const evt = cloudEventsList.find(e => e.id == id);
+        if(!evt) return;
+        editingEventId = evt.id;
+        document.getElementById('editing-badge').classList.remove('hidden');
+        
+        const modeItem = EVENT_MODES.find(m => evt.eventType.includes(m.name));
+        if(modeItem) {
+            currentEventMode = modeItem.id;
+            document.querySelectorAll('.mode-btn').forEach(btn => btn.className = btn.dataset.mode === modeItem.id ? `mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold bg-blue-600 text-white shadow-md shadow-blue-200 border border-blue-600` : `mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50`);
+            updateAnalyzeBtnText();
+        }
+        try {
+            selectionsData = evt.rawInputDetails.selections ? JSON.parse(evt.rawInputDetails.selections) : {};
+            manualInputsData = evt.rawInputDetails.manualInputs ? JSON.parse(evt.rawInputDetails.manualInputs) : {};
+        } catch(e) { initInputs(currentEventMode); }
+        document.getElementById('record-text').value = evt.rawInputDetails?.rawText || '';
+        // 還原事件基本資料（事件日期、長輩姓名、床號）
+        document.getElementById('resident-name').value = evt.residentName || '';
+        document.getElementById('resident-bed').value = evt.bedNumber || '';
+        document.getElementById('event-date').value = toDateInputValue(evt.saveDate);
+        // 歷史紀錄無原始圖檔（僅保留辨識摘要），清空待上傳清單
+        uploadedFiles = [];
+        renderEventFileList();
+        // 清空逐案分析的復原堆疊
+        ['rootCause', 'improvement', 'followUp'].forEach(f => delete regenHistory[f]);
+        updateUndoButtons();
+
+        currentEventResult = { eventType: evt.eventType, rootCause: evt.rootCause, improvement: evt.improvement, followUp: evt.followUp, deIdentifiedText: evt.deIdentifiedText, rawInputDetails: evt.rawInputDetails, residentName: evt.residentName || '', bedNumber: evt.bedNumber || '', imageSummary: (evt.rawInputDetails && evt.rawInputDetails.imageSummary) || '' };
+        closeHistoryModal();
+        switchTab('add-event');
+        renderFormOptions(); renderManualInputs(); checkAnalyzeButtonState(); updateResultDisplay();
+        document.getElementById('save-event-btn-text').innerText = "更新雲端資料與 PDCA 庫";
+        showToast('已載入歷史紀錄，您現在可以修改內容！');
+    };
+
+    // ================= 表單操作 (PDCA) =================
+    window.startNewPDCA = function() {
+        editingPdcaId = null;
+        currentPdcaResult = null;
+        currentPdcaAnalysis = null;
+        pdcaUploadedFiles = [];
+        renderPdcaFileList();
+        ['causeAnalysis', 'plan', 'do', 'check', 'act'].forEach(f => delete regenHistory[f]);
+        updateUndoButtons();
+        document.getElementById('pdca-editing-badge').classList.add('hidden');
+        document.getElementById('save-pdca-btn-text').innerText = "儲存 PDCA 報告至雲端資料庫";
+        resetPDCAFilter();
+        updateResultDisplay();
+    };
+
+    window.loadPDCAForEditing = function(id) {
+        const pdca = cloudPdcaList.find(p => p.id == id);
+        if(!pdca) return;
+        editingPdcaId = pdca.id;
+        document.getElementById('pdca-editing-badge').classList.remove('hidden');
+
+        // 自動帶入歷史的區間設定
+        const dateRangeStr = pdca.dateRange ? String(pdca.dateRange) : '';
+        if(dateRangeStr && dateRangeStr.includes('~')) {
+            const parts = dateRangeStr.split('~');
+            document.getElementById('pdca-start-date').value = parts[0].trim();
+            document.getElementById('pdca-end-date').value = parts[1].trim();
+        }
+
+        // 還原當時的事件類別（舊紀錄無此欄位則保留現有 mode 並重跑篩選）
+        if (pdca.eventMode && EVENT_MODES.some(m => m.id === pdca.eventMode)) {
+            setPdcaEventMode(pdca.eventMode);
+        } else {
+            filterPDCAEvents();
+        }
+
+        currentPdcaResult = { plan: pdca.plan, do: pdca.do, check: pdca.check, act: pdca.act };
+        currentPdcaAnalysis = pdca.causeAnalysis || null;
+        pdcaUploadedFiles = [];
+        renderPdcaFileList();
+        ['causeAnalysis', 'plan', 'do', 'check', 'act'].forEach(f => delete regenHistory[f]);
+        updateUndoButtons();
+        closePDCAHistoryModal();
+        switchTab('pdca');
+        updateResultDisplay();
+        document.getElementById('save-pdca-btn-text').innerText = "更新此 PDCA 報告至雲端";
+        showToast('已載入 PDCA 歷史報告，可單獨重新生成欄位！');
+    }
+
+    window.switchTab = function(tab) {
+      currentTab = tab;
+      document.getElementById('tab-add-event').className = tab === 'add-event' ? "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 bg-blue-600 text-white shadow-md shadow-blue-900/50" : "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-slate-400 hover:bg-slate-800 hover:text-slate-200";
+      document.getElementById('tab-pdca').className = tab === 'pdca' ? "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 bg-blue-600 text-white shadow-md shadow-blue-900/50 flex-wrap" : "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-slate-400 hover:bg-slate-800 hover:text-slate-200 flex-wrap";
+      document.getElementById('view-add-event').style.display = tab === 'add-event' ? 'flex' : 'none';
+      document.getElementById('view-pdca').style.display = tab === 'pdca' ? 'flex' : 'none';
+      updateResultDisplay();
+    };
+
+    window.setApiVersion = function(version) {
+      currentApiVersion = version;
+      document.querySelectorAll('.version-btn').forEach(btn => btn.className = btn.dataset.version === version ? "version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap bg-white shadow-sm text-blue-600" : "version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700");
+      if(currentEventResult && currentTab === 'add-event') document.getElementById('aside-version-badge').innerText = version.toUpperCase();
+      updateAnalyzeBtnText();
+    };
+
+    window.setEventMode = function(mode) {
+      startNewEvent();
+      currentEventMode = mode;
+      document.querySelectorAll('.mode-btn').forEach(btn => btn.className = btn.dataset.mode === mode ? `mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-blue-600 text-white shadow-md shadow-blue-200 border border-blue-600` : `mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300`);
+      initInputs(mode); renderFormOptions(); renderManualInputs(); updateAnalyzeBtnText(); checkAnalyzeButtonState();
+    };
+
+    window.setPdcaEventMode = function(mode) {
+      currentPdcaEventMode = mode;
+      document.querySelectorAll('.pdca-mode-btn').forEach(btn => btn.className = btn.dataset.mode === mode
+        ? `pdca-mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-blue-600 text-white shadow-md shadow-blue-200 border border-blue-600`
+        : `pdca-mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300`);
+      const modeName = EVENT_MODES.find(m => m.id === mode)?.name || '';
+      const shortName = modeName.replace('事件', '').replace('非計畫性', '');
+      const labelEl = document.getElementById('generate-pdca-mode-name');
+      if (labelEl) labelEl.innerText = shortName;
+      filterPDCAEvents();
+    };
+
+    function updateAnalyzeBtnText() {
+      const modeName = EVENT_MODES.find(m => m.id === currentEventMode)?.name;
+      document.getElementById('analyze-btn-text').innerHTML = `<i class="ph ph-brain text-2xl"></i> 🚀 送出 AI 智能分析 (${modeName})`;
+      document.getElementById('analyze-btn-loading').innerHTML = `<i class="ph ph-spinner animate-spin text-2xl shrink-0"></i> <span>AI 正在以【${currentApiVersion}】分析...</span>`;
+    }
+
+    function initInputs(mode) {
+      const selConfig = FORM_CONFIGS[mode] || []; selectionsData = {}; selConfig.forEach(field => selectionsData[field.key] = field.type === 'multiple' ? [] : '');
+      const manConfig = MANUAL_INPUTS_CONFIG[mode] || []; manualInputsData = {}; manConfig.forEach(field => manualInputsData[field.key] = '');
+    }
+
+    window.handleSelectionClick = function(key, value, type) {
+      if (type === 'multiple') { const arr = selectionsData[key] || []; selectionsData[key] = arr.includes(value) ? arr.filter(v => v !== value) : [...arr, value]; } else { selectionsData[key] = selectionsData[key] === value ? '' : value; }
+      renderFormOptions(); checkAnalyzeButtonState();
+    };
+
+    function renderFormOptions() {
+      const container = document.getElementById('form-options-container'); container.innerHTML = '';
+      (FORM_CONFIGS[currentEventMode] || []).forEach(field => {
+        const currentValue = selectionsData[field.key] || (field.type === 'multiple' ? [] : '');
+        const fieldDiv = document.createElement('div'); fieldDiv.className = "space-y-2";
+        fieldDiv.innerHTML = `<p class="text-sm font-semibold text-slate-600">${field.label} ${field.type === 'multiple' ? '<span class="text-xs font-normal text-slate-400">(可多選)</span>' : ''}</p>`;
+        const btnContainer = document.createElement('div'); btnContainer.className = "flex flex-wrap gap-2";
+        field.options.forEach(opt => {
+          const isSelected = field.type === 'multiple' ? currentValue.includes(opt) : currentValue === opt;
+          const btn = document.createElement('button');
+          btn.className = `px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${isSelected ? 'bg-blue-100 border-blue-300 text-blue-700 shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:border-slate-300'}`;
+          btn.innerText = opt; btn.onclick = () => handleSelectionClick(field.key, opt, field.type); btnContainer.appendChild(btn);
+        });
+        fieldDiv.appendChild(btnContainer); container.appendChild(fieldDiv);
+      });
+    }
+
+    window.handleManualInputChange = function(key, value) { manualInputsData[key] = value; checkAnalyzeButtonState(); };
+
+    function renderManualInputs() {
+      const container = document.getElementById('manual-inputs-container'); container.innerHTML = '';
+      (MANUAL_INPUTS_CONFIG[currentEventMode] || []).forEach(field => {
+        const div = document.createElement('div'); div.className = "flex flex-col gap-1";
+        div.innerHTML = `<label class="text-xs font-semibold text-slate-500">${field.label}</label>`;
+        const input = document.createElement('input'); input.type = "text"; input.value = manualInputsData[field.key] || '';
+        input.className = "px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 bg-slate-50";
+        input.oninput = (e) => handleManualInputChange(field.key, e.target.value); div.appendChild(input); container.appendChild(div);
+      });
+    }
+
+    window.handleTextareaChange = function(e) { checkAnalyzeButtonState(); };
+
+    function hasAnyData() {
+      const text = document.getElementById('record-text').value.trim();
+      const hasSelections = Object.values(selectionsData).some(val => Array.isArray(val) ? val.length > 0 : val !== '');
+      const hasManualInputs = Object.values(manualInputsData).some(val => val.trim() !== '');
+      return text || uploadedFiles.length > 0 || hasSelections || hasManualInputs;
+    }
+
+    window.checkAnalyzeButtonState = function() {
+        const btn = document.getElementById('analyze-btn');
+        if(hasAnyData()) { btn.disabled = false; btn.className = "w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all duration-200 shadow-lg bg-blue-600 hover:bg-blue-700 hover:-translate-y-0.5 text-white shadow-blue-600/30 active:translate-y-0"; } 
+        else { btn.disabled = true; btn.className = "w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all duration-200 shadow-lg bg-slate-300 text-white cursor-not-allowed"; }
+    };
+
+    window.handleFileChange = function(e) {
+      const files = Array.from(e.target.files || []).filter(f => f.type.startsWith('image/') || f.type === 'application/pdf');
+      uploadedFiles = uploadedFiles.concat(files);
+      e.target.value = ''; // 允許重複選同一檔
+      renderEventFileList();
+      checkAnalyzeButtonState();
+    };
+    window.handleDrop = function(e) {
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith('image/') || f.type === 'application/pdf');
+      uploadedFiles = uploadedFiles.concat(files);
+      renderEventFileList();
+      checkAnalyzeButtonState();
+    };
+    window.removeFile = function(idx) {
+      uploadedFiles.splice(idx, 1);
+      renderEventFileList();
+      checkAnalyzeButtonState();
+    };
+
+    // ================= PDCA 多檔上傳處理 =================
+    window.handlePdcaFileChange = function(e) {
+      const files = Array.from(e.target.files || []).filter(f => f.type.startsWith('image/'));
+      pdcaUploadedFiles = pdcaUploadedFiles.concat(files);
+      e.target.value = ''; // 允許重複選同一張
+      renderPdcaFileList();
+      updatePDCABadge(); // 有截圖即可啟用生成按鈕
+    };
+    window.handlePdcaDrop = function(e) {
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith('image/'));
+      pdcaUploadedFiles = pdcaUploadedFiles.concat(files);
+      renderPdcaFileList();
+      updatePDCABadge();
+    };
+    window.removePdcaFile = function(idx) {
+      pdcaUploadedFiles.splice(idx, 1);
+      renderPdcaFileList();
+      updatePDCABadge();
+    };
+    function renderPdcaFileList() {
+      const container = document.getElementById('pdca-file-list');
+      if (!container) return;
+      if (!pdcaUploadedFiles.length) {
+        container.innerHTML = '';
+        return;
+      }
+      container.innerHTML = pdcaUploadedFiles.map((f, i) => `
+        <div class="flex items-center gap-2 bg-teal-50 border border-teal-200 rounded-lg pl-3 pr-1 py-1 text-sm">
+          <i class="ph ph-image text-teal-600"></i>
+          <span class="font-medium text-slate-700 truncate max-w-[200px]">${f.name}</span>
+          <span class="text-xs text-slate-400">${(f.size / 1024).toFixed(0)} KB</span>
+          <button onclick="removePdcaFile(${i})" class="text-slate-400 hover:text-rose-500 p-1 rounded hover:bg-rose-50 transition-colors" title="移除"><i class="ph ph-x"></i></button>
+        </div>
+      `).join('');
+    }
+    async function fileToBase64(file) {
+      return new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // ================= 結果欄位手動編輯：同步回狀態 =================
+    // 使用者直接於畫面編輯內容後，blur 時把文字寫回 currentEventResult /
+    // currentPdcaResult / currentPdcaAnalysis，後續重新生成下游欄位即會沿用
+    window.syncEditableField = function(scope, field, el) {
+      const text = (el.innerText || '').replace(/ /g, ' ').split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+      if (scope === 'event') {
+        if (currentEventResult) currentEventResult[field] = text;
+      } else if (scope === 'pdca') {
+        if (field === 'causeAnalysis') {
+          currentPdcaAnalysis = text;
+        } else {
+          if (!currentPdcaResult) currentPdcaResult = { plan: '', do: '', check: '', act: '' };
+          currentPdcaResult[field] = text;
+        }
+      }
+    };
+
+    // 渲染單一事件已上傳的截圖清單（可多檔）
+    function renderEventFileList() {
+      const c = document.getElementById('file-list');
+      if (!c) return;
+      c.innerHTML = uploadedFiles.map((f, i) => `
+        <div class="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg pl-3 pr-1 py-1 text-sm">
+          <i class="ph ${f.type === 'application/pdf' ? 'ph-file-pdf' : 'ph-image'} text-blue-600"></i>
+          <span class="font-medium text-slate-700 truncate max-w-[200px]">${f.name}</span>
+          <span class="text-xs text-slate-400">${(f.size / 1024).toFixed(0)} KB</span>
+          <button onclick="removeFile(${i})" class="text-slate-400 hover:text-rose-500 p-1 rounded hover:bg-rose-50 transition-colors" title="移除"><i class="ph ph-x"></i></button>
+        </div>
+      `).join('');
+    }
+
+    // 顯示/隱藏「AI 截圖辨識摘要」（截圖無法存資料庫，改以此文字摘要保存）
+    function updateImageSummaryDisplay() {
+      const box = document.getElementById('image-summary-box');
+      const txt = document.getElementById('image-summary-text');
+      if (!box || !txt) return;
+      let summary = '';
+      if (currentEventResult) {
+        summary = currentEventResult.imageSummary
+          || (currentEventResult.rawInputDetails && currentEventResult.rawInputDetails.imageSummary)
+          || '';
+      }
+      if (summary && summary.trim()) {
+        txt.innerText = summary.trim();
+        box.classList.remove('hidden');
+      } else {
+        box.classList.add('hidden');
+      }
+    }
+
+    // ================= followUp 追蹤模板 =================
+    // 預先寫好護理師會撰寫的追蹤紀錄樣板，日期/具體數值處留 　/　/　或 ______ 由人工事後補上
+    const TRACKING_BLOCKS = {
+      hosp_discharge:
+        '出院追蹤（ 　/　/　）：住民於本日由 ______ 醫院辦理出院，出院診斷為 ______；返院後生命徵象穩定（T:__ P:__ R:__ BP:__/__），意識清楚，依出院醫囑持續用藥 ______，傷口/管路狀況：______，並安排 ______ 之後續照護計畫，家屬已知會。',
+      hosp_opd:
+        '看門診回診追蹤（ 　/　/　）：陪同住民至 ______ 科回診，醫師評估 ______，處方調整/延續：______，建議 ______，下次回診日期：　/　/　。',
+      hosp_close:
+        '結案追蹤（ 　/　/　）：本次住院事件後續追蹤已完成，住民生命徵象穩定，飲食/活動/睡眠回復常態，無發燒或其他不適主訴，相關用藥與照護計畫已回歸日常常規，家屬已知會，本案予以結案。',
+
+      pu_opd:
+        '門診追蹤（ 　/　/　）：陪同住民至 ______ 科門診就診，醫師評估壓傷部位（______）為第 __ 級，傷口大小 __×__ cm，滲液 ______，處置：______，建議續用 ______ 敷料，預計下次回診日：　/　/　。',
+      pu_close:
+        '結案追蹤（ 　/　/　）：壓傷部位（______）傷口已癒合/收口，皮膚完整無紅腫破皮，續以氣墊床及定時翻身（每 __ 小時）等減壓措施維持，家屬已知會，本案壓傷事件予以結案。',
+
+      inf_skin_opd:
+        '門診追蹤（ 　/　/　）：陪同住民至皮膚科就診，醫師診斷為 ______，處方藥膏/口服藥：______，使用方式：______，並衛教患部清潔、衣物/被褥消毒及接觸隔離注意事項，預計下次回診日：　/　/　。',
+      inf_skin_close:
+        '結案追蹤（ 　/　/　）：皮膚病灶已消退/痊癒，無新增紅疹、搔癢或破皮主訴，環境/床單/衣物消毒程序已完成，接觸者監測無異常，家屬已知會，本案感染事件予以結案。',
+
+      inf_resp_uri_discharge:
+        '出院追蹤（ 　/　/　）：住民於本日由 ______ 醫院辦理出院，出院診斷為 ______；返院後體溫 __ °C、生命徵象穩定，依出院醫囑使用抗生素 ______ 至 　/　/　，並持續觀察呼吸/排尿狀況、攝水量及尿量，家屬已知會。',
+      inf_resp_uri_opd:
+        '看門診回診追蹤（ 　/　/　）：陪同住民至 ______ 科回診，追蹤檢驗結果（CBC / U/A / CXR 等）：______，醫師評估 ______，處方延續/調整：______，下次回診日：　/　/　。',
+      inf_resp_uri_close:
+        '結案追蹤（ 　/　/　）：感染症狀已緩解，體溫穩定於正常範圍 __ 天，相關檢驗值（白血球、尿液常規等）回復正常，停用抗生素後 __ 天無復發跡象，家屬已知會，本案感染事件予以結案。',
+
+      fall_opd:
+        '就醫回診追蹤（ 　/　/　）：因本次跌倒後 ______（傷勢/主訴），於 ______ 就醫，經 ______ 科評估／處置為 ______，影像／檢查結果：______，後續醫囑／建議：______，下次回診日期：　/　/　。',
+      fall_close:
+        '結案追蹤（ 　/　/　）：住民跌倒後傷處 ______（已癒合／穩定／無異常），觀察期間無再次跌倒，已落實之防跌措施（______）持續執行中，家屬已知會，本案跌倒事件予以結案。',
+
+      generic_close:
+        '結案追蹤（ 　/　/　）：本案後續追蹤已完成，住民狀況穩定，相關照護措施已回歸日常常規，家屬已知會，本案予以結案。'
+    };
+
+    function buildFollowUpTrackingTemplate(mode, selections, manualInputs, rawText) {
+      const join = arr => arr.join('\n\n');
+
+      if (mode === 'hospitalization') {
+        return join([TRACKING_BLOCKS.hosp_discharge, TRACKING_BLOCKS.hosp_opd, TRACKING_BLOCKS.hosp_close]);
+      }
+      if (mode === 'pressure_ulcer') {
+        return join([TRACKING_BLOCKS.pu_opd, TRACKING_BLOCKS.pu_close]);
+      }
+      if (mode === 'infection') {
+        const infTypeSel = (selections && selections.inf_type) || '';
+        const infTypeManual = (manualInputs && manualInputs.inf_type) || '';
+        const combined = `${infTypeSel} ${infTypeManual} ${rawText || ''}`;
+        const isRespOrUrinary = /呼吸道|泌尿道/.test(combined);
+        const isSkinOrScabies = /皮膚|傷口|疥瘡/.test(combined);
+        if (isRespOrUrinary && !isSkinOrScabies) {
+          return join([TRACKING_BLOCKS.inf_resp_uri_discharge, TRACKING_BLOCKS.inf_resp_uri_opd, TRACKING_BLOCKS.inf_resp_uri_close]);
+        }
+        return join([TRACKING_BLOCKS.inf_skin_opd, TRACKING_BLOCKS.inf_skin_close]);
+      }
+      if (mode === 'fall') {
+        return join([TRACKING_BLOCKS.fall_opd, TRACKING_BLOCKS.fall_close]);
+      }
+      // 安全預設：任何未列出的類型也一定要有結案追蹤
+      return TRACKING_BLOCKS.generic_close;
+    }
+
+    // ================= 執行分析 (單一事件) =================
+    window.handleAnalyze = async function() {
+      if (!hasAnyData()) return alert('請輸入或勾選資料！');
+      document.getElementById('conflict-warning').classList.add('hidden');
+      const apiKey = ""; // 已移除，改由 Supabase 代理
+      const eventName = EVENT_MODES.find(m => m.id === currentEventMode)?.name;
+      const textInput = document.getElementById('record-text').value.trim();
+      const activeSelections = Object.entries(selectionsData).filter(([_, val]) => Array.isArray(val) ? val.length > 0 : val !== '').reduce((acc, [key, val]) => ({ ...acc, [key]: val }), {});
+      const activeManualInputs = Object.entries(manualInputsData).filter(([_, val]) => val.trim() !== '').reduce((acc, [key, val]) => { const label = MANUAL_INPUTS_CONFIG[currentEventMode].find(c => c.key === key)?.label || key; return { ...acc, [label]: val.trim() }; }, {});
+      const currentMeasures = localStorage.getItem(`careai_measures_${currentLoggedWard}`) || '';
+      const availableTools = localStorage.getItem(`careai_tools_${currentLoggedWard}`) || '';
+      const staffingFamily = localStorage.getItem(`careai_staffing_${currentLoggedWard}`) || '';
+
+      let conflictMsg = '';
+      if (currentEventMode === 'fall') {
+        if (activeSelections['injury'] && activeSelections['injury'] !== '無傷' && activeSelections['isYesNo'] === '否') conflictMsg += '系統偵測：勾選了「有受傷」，但「是否通報家屬」卻選了「否」，請確認是否符合機構通報規範。';
+        if (activeSelections['location'] === '床邊' && (activeSelections['restraint']||[]).includes('雙側床欄') && textInput.includes('自行下床')) conflictMsg += (conflictMsg?'<br/><br/>':'') + '系統偵測：已使用「雙側床欄」，但紀錄提及「自行下床」，請確認約束是否確實。';
+        if ((activeSelections['restraint']||[]).includes('未使用約束') && (activeSelections['restraint']||[]).length > 1) conflictMsg += (conflictMsg?'<br/><br/>':'') + '系統偵測：「約束物」同時勾選了未使用與其他工具，存在邏輯矛盾。';
+        if (activeSelections['location'] === '房間內' && activeSelections['situation'] === '如廁' && !textInput.includes('便盆椅')) conflictMsg += (conflictMsg?'<br/><br/>':'') + '系統偵測：地點「房間內」但情境為「如廁」，請確認地點是否為「浴廁」或使用便盆椅。';
+      }
+      if (conflictMsg) { document.getElementById('conflict-message').innerHTML = conflictMsg; document.getElementById('conflict-warning').classList.remove('hidden'); }
+
+      setLoadingState('add-event', true);
+
+      try {
+        const trackingTemplate = buildFollowUpTrackingTemplate(currentEventMode, activeSelections, manualInputsData, textInput);
+        const trackingClause = trackingTemplate ? `
+          【followUp 追蹤節點規定 — 請嚴格依格式】
+          - 先依改善措施對應寫條列追蹤（沿用上方 followUp 規則的未來式語氣）。
+          - 接著另起一段（用 \\n\\n 與條列段分隔），逐一輸出【下方範本】的每一個追蹤節點；每個節點自成一段，格式**固定**為：
+            「<節點名稱>（ 　/　/　）：<該節點追蹤敘述>」
+          - ⚠️【節點名稱為固定標題】<節點名稱>（出院追蹤、看門診回診追蹤、門診追蹤、就醫回診追蹤、結案追蹤）必須逐字保留、放在每段最前面，一字不可改、不可省略、不可只寫日期而漏掉名稱。
+          - ⚠️【日期格式固定】一律用「全形括號 + 台灣年在前」格式「（ 　/　/　）」，日期留白、不可自行填入。
+          - 只有 <該節點追蹤敘述> 是「可依個案參考範本改寫」的部分：可依實際個案自然調整用字、不必逐字照抄；未知的未來資訊（就診醫院、診斷、回診結果、檢驗值等）留白（______）或寫「待追蹤」，不要編造。
+          - ⚠️【節點不可刪減】範本有幾個節點就要輸出幾段，不可刪除或合併；「結案追蹤」必為最後一段，絕對不可省略。
+          【下方追蹤節點範本（節點名稱與日期格式固定，敘述可參考改寫）】：
+          ${trackingTemplate}
+        ` : '';
+
+        let promptText = `
+          你是一位「資深且務實的長照機構護理督導」。請根據使用者紀錄撰寫分析報告。
+          【當前分析類型】：${eventName}
+          【機構可用資源】：目前措施：${currentMeasures || '無'} / 現有設備：${availableTools || '無'} / 人力家屬：${staffingFamily || '無'}
+          【輸入資料】：手動欄位：${JSON.stringify(activeManualInputs)} / 結構選項：${JSON.stringify(activeSelections)} / 紀錄：${textInput}
+          【輸出要求】：純 JSON，包含 eventType, rootCause, improvement, followUp, deIdentifiedText, imageSummary。
+          - rootCause: ${EVENT_FIELD_RULES.rootCause}
+          - improvement: ${EVENT_FIELD_RULES.improvement}
+          - followUp: ${EVENT_FIELD_RULES.followUp}
+          - deIdentifiedText: 摘要去識別化，不可腦補。
+          - imageSummary: 若使用者有上傳截圖（可能多張），請以「客觀、完整」的方式把所有截圖中辨識到的資訊文字化保存 —— 包含表格數值、欄位名稱、勾選項目、日期時間、生命徵象、用藥、簽名欄位、手寫備註等，作為該批紙本紀錄的文字化存檔；多張截圖請依序彙整（可用「截圖1：」「截圖2：」分段）；若沒有上傳任何截圖，則回傳空字串 ""。不要在此欄位做分析或建議，只忠實記錄截圖內容。
+          【換行硬性規定】⚠️ 上述每個欄位的字串值中，每一個條列點之間都必須有「真正的換行符號（\\n）」。嚴禁把多個條列點連寫在同一行，否則畫面會無法正確分行。
+          ${trackingClause}
+        `;
+
+        let parts = [{ text: promptText }];
+        for (const f of uploadedFiles) {
+          try {
+            const b64 = await fileToBase64(f);
+            parts.push({ inlineData: { data: b64, mimeType: f.type } });
+          } catch (err) { console.warn('截圖讀取失敗', f.name, err); }
+        }
+
+        const response = await fetchWithRetry(GEMINI_PROXY_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { eventType: { type: "STRING" }, rootCause: { type: "STRING" }, improvement: { type: "STRING" }, followUp: { type: "STRING" }, deIdentifiedText: { type: "STRING" }, imageSummary: { type: "STRING" } } } } })
+        });
+        if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
+        
+        currentEventResult = JSON.parse((await response.json()).candidates[0].content.parts[0].text);
+        // 若沒上傳截圖則摘要清空，避免 AI 誤填
+        const imgSummary = uploadedFiles.length > 0 ? (currentEventResult.imageSummary || '') : '';
+        currentEventResult.rawInputDetails = { rawText: textInput, manualInputs: JSON.stringify(activeManualInputs), selections: JSON.stringify(activeSelections), imageSummary: imgSummary };
+        currentEventResult.imageSummary = imgSummary;
+        document.getElementById('aside-version-badge').innerText = currentApiVersion.toUpperCase();
+      } catch (error) { console.error(error); alert('AI 分析失敗！'); } finally { setLoadingState('add-event', false); }
+    };
+
+    // ================= 儲存與修改 (包含連線 GAS) =================
+    window.handleSaveToPDCA = async function() {
+      if (!currentEventResult) return;
+      // 事件日期：使用者於「事件基本資料」填寫的日期，用於 PDCA 季度分類（可補登舊事件）
+      const timestamp = (document.getElementById('event-date').value || '').trim() || todayDateStr();
+      const newEvent = { ...currentEventResult, id: editingEventId || Date.now(), saveDate: timestamp };
+      const gasUrl = getGasUrl();
+      
+      try {
+        showToast('正在同步資料至機構雲端...');
+        const residentName = document.getElementById('resident-name').value.trim();
+        const bedNumber = document.getElementById('resident-bed').value.trim();
+        const payload = { action: editingEventId ? "updateEvent" : "saveEvent", ward: currentLoggedWard, id: newEvent.id, timestamp: timestamp, eventType: newEvent.eventType, rawText: newEvent.rawInputDetails.rawText, manualInputs: newEvent.rawInputDetails.manualInputs, selections: newEvent.rawInputDetails.selections, deIdentifiedText: newEvent.deIdentifiedText, rootCause: newEvent.rootCause, improvement: newEvent.improvement, followUp: newEvent.followUp, residentName: residentName, bedNumber: bedNumber, imageSummary: newEvent.rawInputDetails.imageSummary || newEvent.imageSummary || '' };
+        const res = await fetchWithRetry(gasUrl, { method: 'POST', body: JSON.stringify(payload), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+        if(!res) throw new Error("無回應");
+        const resData = await res.json();
+        
+        if(resData.status === 'success') {
+           showToast(editingEventId ? '資料更新成功！' : '資料儲存成功！');
+           await fetchEventsFromCloud(); 
+           startNewEvent(); 
+        } else throw new Error(resData.message);
+      } catch (err) { console.error(err); showToast('雲端同步失敗。'); }
+    };
+
+    window.handleExportEvent = function() {
+      if (!currentEventResult) return;
+      const formatText = (text) => text ? normalizePdcaText(text).split('\n').filter(l => l.trim()).join('\n\n') : '';
+      const cleanImprovement = currentEventResult.improvement.replace(/\(建議.*?\)/g, '').trim();
+      const residentName = document.getElementById('resident-name').value.trim() || currentEventResult.residentName || '';
+      const bedNumber = document.getElementById('resident-bed').value.trim() || currentEventResult.bedNumber || '';
+      const content = `【CareAI 異常事件報告】\n匯出時間：${new Date().toLocaleString('zh-TW')}\n版本：${currentApiVersion}\n\n■ 長輩姓名：${residentName || '（未填）'}\n■ 床號：${bedNumber || '（未填）'}\n\n■ 事件類型：\n${currentEventResult.eventType}\n\n■ 資料摘要：\n${formatText(currentEventResult.deIdentifiedText)}\n\n■ 原因分析：\n${formatText(currentEventResult.rootCause)}\n\n■ 改善措施：\n${formatText(cleanImprovement)}\n\n■ 追蹤情形：\n${formatText(currentEventResult.followUp)}`;
+      downloadTxt(content, `異常事件_${currentEventResult.eventType.split(' ')[0]}`);
+    };
+
+    // ================= 單欄位重新生成（逐案分析）=================
+    // 重新生成時沿用初次 handleAnalyze 的指令、語氣與格式（不跑板），
+    // 並以「目前的上游欄位內容」（含使用者手動修改）作為依據聯動
+    window.handleRegenerateField = async function(field) {
+      if (!currentEventResult) return;
+      const apiKey = ""; // 已移除，改由 Supabase 代理
+      document.getElementById(`loading-${field}`)?.classList.replace('hidden', 'flex');
+
+      try {
+        const eventName = EVENT_MODES.find(m => m.id === currentEventMode)?.name || currentEventResult.eventType || '異常事件';
+        const fieldLabelMap = { rootCause: '原因分析', improvement: '改善措施', followUp: '追蹤情形' };
+        const fieldLabel = fieldLabelMap[field] || field;
+        const currentMeasures = localStorage.getItem(`careai_measures_${currentLoggedWard}`) || '';
+        const availableTools = localStorage.getItem(`careai_tools_${currentLoggedWard}`) || '';
+        const staffingFamily = localStorage.getItem(`careai_staffing_${currentLoggedWard}`) || '';
+        const rid = currentEventResult.rawInputDetails || {};
+        const rawText = rid.rawText || document.getElementById('record-text').value.trim();
+
+        // 欄位輸出規則 — 直接讀取與 handleAnalyze 共用的 EVENT_FIELD_RULES，
+        // 確保「第一次產生」與「重新生成」的格式/語氣/條列方式 100% 一致
+
+        // 上游已定稿內容（含使用者手動修改），重新生成時必須對齊聯動
+        let upstreamBlock = '';
+        if (field === 'improvement') {
+          upstreamBlock = `【已定稿的原因分析（必須據此撰寫改善措施，逐項對應）】：\n${currentEventResult.rootCause || ''}\n`;
+        } else if (field === 'followUp') {
+          upstreamBlock = `【已定稿的原因分析】：\n${currentEventResult.rootCause || ''}\n\n【已定稿的改善措施（追蹤情形必須與其一對一對應）】：\n${currentEventResult.improvement || ''}\n`;
+        }
+
+        // followUp 的固定追蹤模板（與初次產生規則相同）
+        let trackingClause = '';
+        if (field === 'followUp') {
+          let selObj = selectionsData, manObj = manualInputsData;
+          try { if (rid.selections) selObj = JSON.parse(rid.selections); } catch(e) {}
+          try { if (rid.manualInputs) manObj = JSON.parse(rid.manualInputs); } catch(e) {}
+          const trackingTemplate = buildFollowUpTrackingTemplate(currentEventMode, selObj, manObj, rawText);
+          if (trackingTemplate) {
+            trackingClause = `\n【followUp 追蹤節點規定（務必與第一次產生一致，嚴格依格式）】先依改善措施寫條列追蹤（未來式），再另起一段（用 \\n\\n 分隔），逐一輸出下方範本的每一個追蹤節點；每個節點自成一段，格式固定為「<節點名稱>（ 　/　/　）：<該節點追蹤敘述>」。\n⚠️【節點名稱固定】<節點名稱>（出院追蹤／看門診回診追蹤／門診追蹤／就醫回診追蹤／結案追蹤）必須逐字保留於每段最前面，一字不可改、不可省略、不可只寫日期而漏名稱。\n⚠️【日期格式固定】一律用「全形括號 + 台灣年在前」格式「（ 　/　/　）」、日期留白不可自行填入。\n只有 <該節點追蹤敘述> 可依個案參考範本改寫（不必逐字照抄）；未知的未來資訊以留白（______）或「待追蹤」帶過、不要編造。\n⚠️【節點不可刪減】範本有幾個節點就輸出幾段，不可刪除或合併；「結案追蹤」必為最後一段不可省略。\n【追蹤節點範本（節點名稱與日期格式固定，敘述可參考改寫）】：\n${trackingTemplate}`;
+          }
+        }
+
+        const promptText = `
+你是一位「資深且務實的長照機構護理督導」。請僅重新生成異常事件分析報告中的「${fieldLabel}」欄位，其餘欄位維持不變。
+【當前分析類型】：${eventName}
+【機構可用資源】：目前措施：${currentMeasures || '無'} / 現有設備：${availableTools || '無'} / 人力家屬：${staffingFamily || '無'}
+【輸入資料】：手動欄位：${rid.manualInputs || '{}'} / 結構選項：${rid.selections || '{}'} / 紀錄：${rawText || '（無）'}
+${upstreamBlock}【「${fieldLabel}」欄位輸出規則（與初次產生時完全相同，務必遵守語氣、格式、條列方式與用詞範例，不可偏離版型）】：
+${EVENT_FIELD_RULES[field] || '條列式、語氣專業。'}${trackingClause}
+【換行硬性規定】⚠️ 輸出的字串值中，每一個條列點之間都必須有「真正的換行符號（\\n）」。嚴禁把多個條列點連寫在同一行。
+【輸出格式】：純 JSON，結構為 { ${field}: string }。
+        `;
+
+        const response = await fetchWithRetry(GEMINI_PROXY_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { [field]: { type: "STRING" } } } } })
+        });
+        if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
+
+        pushRegenHistory(field, currentEventResult[field]); // 先存舊版供「復原」
+        currentEventResult[field] = JSON.parse((await response.json()).candidates[0].content.parts[0].text)[field];
+        document.getElementById(`res-${field.toLowerCase().replace('up','-up').replace('cause','-cause')}`).innerHTML = normalizePdcaText(currentEventResult[field]).split('\n').filter(l=>l.trim()).map(l=>`<p class="text-sm text-slate-600 mb-3">${l.trim()}</p>`).join('');
+      } catch (err) { console.error(err); alert('重新生成失敗'); } finally { document.getElementById(`loading-${field}`)?.classList.replace('flex', 'hidden'); }
+    };
+
+    window.handleCopyField = function(id, cleanTime) {
+      let text = currentEventResult[id.replace('res-', '').replace('-', 'C').replace('-', 'U')];
+      if(cleanTime) text = text.replace(/\(建議.*?\)/g, '').trim();
+      navigator.clipboard.writeText(text.split('\n').filter(l=>l.trim()).join('\n\n')).then(()=>showToast('已複製！')).catch(()=>showToast('複製失敗'));
+    };
+
+    // ================= PDCA 區間篩選與產生 =================
+    window.filterPDCAEvents = function() {
+      const sDateStr = document.getElementById('pdca-start-date').value;
+      const eDateStr = document.getElementById('pdca-end-date').value;
+      const modeName = EVENT_MODES.find(m => m.id === currentPdcaEventMode)?.name;
+
+      const sDate = sDateStr ? new Date(sDateStr) : null;
+      const eDate = eDateStr ? new Date(eDateStr) : null;
+      if(sDate) sDate.setHours(0, 0, 0, 0);
+      if(eDate) eDate.setHours(23, 59, 59, 999);
+
+      pdcaFilteredEvents = cloudEventsList.filter(evt => {
+          if (modeName && !(evt.eventType || '').includes(modeName)) return false;
+          const d = new Date(evt.saveDate);
+          if (isNaN(d.getTime())) return true;
+          if (sDate && d < sDate) return false;
+          if (eDate && d > eDate) return false;
+          return true;
+      });
+      updatePDCABadge();
+      renderSavedEvents();
+    };
+
+    window.resetPDCAFilter = function() {
+      setDefaultQuarterDates();
+      filterPDCAEvents();
+    };
+
+    // ================= 步驟一：產生原因分析（趨勢判讀）=================
+    window.handleGenerateCauseAnalysis = async function() {
+      // beta：有篩選到的事件「或」有上傳截圖，皆可分析
+      if (pdcaFilteredEvents.length === 0 && pdcaUploadedFiles.length === 0) { alert('請先篩選到事件，或上傳參考截圖'); return; }
+
+      const btn = document.getElementById('generate-analysis-btn');
+      document.getElementById('generate-analysis-text').style.display = 'none';
+      document.getElementById('generate-analysis-loading').style.display = 'flex';
+      btn.disabled = true;
+      // 顯示結果面板與原因分析卡片載入動畫
+      document.getElementById('loading-state').classList.add('hidden');
+      ['empty-state-event','empty-state-pdca','result-event-content'].forEach(id=>document.getElementById(id).classList.add('hidden'));
+      document.getElementById('result-pdca-content').classList.remove('hidden');
+      const fieldsWrapEl = document.getElementById('pdca-fields-wrap');
+      if (fieldsWrapEl && !currentPdcaResult) fieldsWrapEl.style.display = 'none';
+      document.getElementById('res-pdca-analysis').innerHTML = `<p class="text-sm text-slate-400 py-10 text-center">AI 正在判讀趨勢與根因...</p><div id="loading-pdca-analysis" class="absolute inset-0 bg-orange-50/80 flex items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-orange-600"></i></div>`;
+
+      try {
+        const apiKey = ""; // 已移除，改由 Supabase 代理
+        const eventName = EVENT_MODES.find(m => m.id === currentPdcaEventMode)?.name || '異常事件';
+        const eventsBlock = pdcaFilteredEvents.map((e, i) => `[${i + 1}] ${e.eventType}\n  住民: ${e.residentName || '未填'}　床號: ${e.bedNumber || '未填'}\n  原因: ${e.rootCause}\n  措施: ${e.improvement}\n  追蹤: ${e.followUp || ''}\n  發生時間: ${e.saveDate || ''}`).join('\n\n');
+        const hasImages = pdcaUploadedFiles.length > 0;
+        const thresholdText = serializeThresholds();
+
+        const promptText = `
+你是一位資深長照機構護理督導。請依【事件清單】、【參考截圖】、【閾值設定】，產出一份「${eventName} 原因分析（趨勢判讀）」。
+這份原因分析是後續撰寫 PDCA 的依據，必須是**有憑有據的趨勢判讀與根因剖析**，不是空話。
+
+═══════════════════════════════════
+【分析任務】
+═══════════════════════════════════
+1. **趨勢總結**：本季【${eventName}】個案主要集中於哪些子類型/部位/情境？哪個月份件數最多？比率/密度的月度變化趨勢為何？（若【參考截圖】有統計表/趨勢圖，務必引用其中數值）
+2. **共同根因歸納**：歸納這些事件的共同促成因素（吞嚥/呼吸道/環境/設備/流程/住民健康/家屬意願等），分項條列。
+3. **逐月（或逐案）分析**：依事件清單，分月說明每月共幾人次、每一筆個案的原因與性質。仿照下列範例語氣：
+   「1月非計畫性住院共 3 人次：因心臟功能不佳住院（屬慢性疾病急性惡化）；腎臟結石引起泌尿道感染住院（屬感染性住院，泌尿道早期監測需加強）；氣切個案肺炎住院（與氣道清除能力差有關）。」
+4. **改善必要性判斷**：依【閾值設定】比對【參考截圖】或事件統計的實際數據，**明確指出哪些指標已超過閾值、需要納入本次 PDCA 改善重點**，哪些未超標可暫不處理。
+
+═══════════════════════════════════
+【事件清單】（共 ${pdcaFilteredEvents.length} 筆，皆為 ${eventName} 類型）
+═══════════════════════════════════
+${eventsBlock || '（本次無篩選到的逐案事件，請完全依【參考截圖】的數據進行分析）'}
+
+═══════════════════════════════════
+【閾值設定】（機構自訂，用於判斷指標是否超標）
+═══════════════════════════════════
+${thresholdText || '（使用者未填寫閾值，請仍依專業經驗判斷指標高低，並提醒使用者建議填寫閾值）'}
+${hasImages ? `
+═══════════════════════════════════
+【參考截圖】（共 ${pdcaUploadedFiles.length} 張）— 可能含月度統計表、趨勢圖、各指標實際數值
+═══════════════════════════════════
+請辨識圖中所有數值（比率、密度、件數、達成率等），作為趨勢判讀與超標判斷的主要依據。
+` : ''}
+═══════════════════════════════════
+【輸入有效性檢查（重要）】
+═══════════════════════════════════
+若有上傳【參考截圖】，請先判讀截圖內容，依下列規則決定 inputError：
+(a) 【選錯類別】若截圖其實是「其他類別」的指標統計表 —— 目前選的是【${eventName}】，但截圖內容屬於其他主題（如：感染指標、泌尿道、壓傷指標、約束指標、跌倒指標、非計畫性住院指標…）—— 請在 inputError 填：「這張截圖看起來是『（指出截圖實際屬於哪一類指標）』，但你目前選擇的是『${eventName} PDCA』，請切換到對應的類別後再試。」
+(b) 【內容不符】若截圖根本不是品質指標／統計表／事件清單（例如照片、無關文件或其他主題），請在 inputError 填：「您匯入的截圖內容似乎與品質分析無關（簡述截圖實際看到的內容），請確認是否匯錯圖片。」
+(c) 【相符】若截圖內容確實與【${eventName}】相符（含本類別的數據列即可），或沒有上傳截圖但有事件清單可分析，inputError 一律回空字串 ""。
+只要 inputError 非空字串，causeAnalysis 一律回空字串 ""。
+
+═══════════════════════════════════
+【輸出格式】
+═══════════════════════════════════
+純 JSON，結構為 { causeAnalysis: string, inputError: string }。
+causeAnalysis 內容以「N.」編號分段（1. 趨勢總結 / 2. 共同根因 / 3. 逐月或逐案分析 / 4. 改善必要性判斷），逐月分析可在段內再細分（如「1月…」「2月…」也各自獨立一行）。內容須具體、有數據、有因果，不可空泛。
+⚠️【換行硬性規定】causeAnalysis 字串中，每一個編號段落、每一個逐月小段之間都必須有「真正的換行符號（\\n）」。嚴禁把多段連寫在同一行。
+        `;
+
+        const parts = [{ text: promptText }];
+        for (const f of pdcaUploadedFiles) {
+          try {
+            const b64 = await fileToBase64(f);
+            parts.push({ inlineData: { data: b64, mimeType: f.type } });
+          } catch (e) { console.warn('原因分析參考圖讀取失敗', f.name, e); }
+        }
+
+        const response = await fetchWithRetry(GEMINI_PROXY_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { causeAnalysis: { type: "STRING" }, inputError: { type: "STRING" } } } } })
+        });
+        if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
+        const caResult = JSON.parse((await response.json()).candidates[0].content.parts[0].text);
+        // 匯入內容不符 → 直接提醒，不產出
+        if (caResult.inputError && caResult.inputError.trim()) { alert('⚠️ ' + caResult.inputError.trim()); return; }
+        pushRegenHistory('causeAnalysis', currentPdcaAnalysis); // 先存舊版供「復原」
+        currentPdcaAnalysis = caResult.causeAnalysis;
+        showToast('原因分析已產生，可接著按「步驟二」生成 PDCA');
+      } catch (err) {
+        console.error(err);
+        alert('原因分析產生失敗');
+      } finally {
+        document.getElementById('loading-pdca-analysis')?.classList.replace('flex', 'hidden');
+        document.getElementById('generate-analysis-text').style.display = 'flex';
+        document.getElementById('generate-analysis-loading').style.display = 'none';
+        btn.disabled = false;
+        updateResultDisplay();
+      }
+    };
+
+    window.handleGeneratePDCA = async function() {
+      // beta：有篩選到的事件「或」有上傳截圖，皆可生成
+      if (pdcaFilteredEvents.length === 0 && pdcaUploadedFiles.length === 0) { alert('請先篩選到事件，或上傳參考截圖'); return; }
+      setLoadingState('pdca', true);
+      try {
+        const apiKey = ""; // 已移除，改由 Supabase 代理
+        const eventName = EVENT_MODES.find(m => m.id === currentPdcaEventMode)?.name || '異常事件';
+        const tpl = getPdcaStyleTemplate(currentPdcaEventMode);
+        const eventsBlock = pdcaFilteredEvents.map((e, i) => `[${i + 1}] ${e.eventType}\n  住民: ${e.residentName || '未填'}　床號: ${e.bedNumber || '未填'}\n  原因: ${e.rootCause}\n  措施: ${e.improvement}\n  追蹤: ${e.followUp || ''}\n  發生時間: ${e.saveDate || ''}`).join('\n\n');
+        const thresholdText = serializeThresholds();
+
+        const hasImages = pdcaUploadedFiles.length > 0;
+        const promptText = `
+你是一位資深長照機構護理督導。請依【事件清單】與【參考截圖】（若有提供）撰寫一份「${eventName} PDCA 品質改善報告」。
+**核心要求：產出必須是「分析推論型」內容，而不是空話填樣板。每一點都要與分析結論有明確因果連結。**
+
+═══════════════════════════════════
+【第一步：內部分析（先想清楚，不直接輸出此段）】
+═══════════════════════════════════
+請依序在心中完成下列推理（不要把分析過程當成 plan/do 條目輸出，分析結論要融入內文）：
+1. **模式識別**：本季【${eventName}】最多發生的子類型/部位/情境是什麼？（如：感染最多是泌尿道？跌倒最多在床邊？住院最多因肺炎？壓傷最多在薦骨？）
+2. **數量與比率**：各子類型件數、密度（‰）、佔比（%），若【參考截圖】有提供統計表/趨勢圖，**優先以截圖數據為準**，並指出與閾值的差距。
+3. **根因群組**：是環境因素（地面/動線/床欄）、住民健康（雙下肢無力/失智/長期臥床）、流程缺失（交班/稽核/通報）、設備不足（叫人鈴/翻身枕/氣墊床），還是人員技術（洗手/抽痰/換藥）？
+4. **高風險族群特徵**：哪一類住民最常發生？（如：使用尿管者、ADL<30 者、新入住者）
+5. **改善優先順序**：依上述推導出 3–5 個關鍵改善方向。
+
+═══════════════════════════════════
+【第二步：依分析結論撰寫 PDCA】
+═══════════════════════════════════
+**寫作風格要求**：
+- **Plan 每一點都要呼應分析發現**。例：不要寫「完成體溫監測」，要寫「**因本季 ${eventName} 共 N 例中 N 例為呼吸道相關，故預於　月底前完成全員體溫監測稽核**」。
+- **Do 每一點對應 Plan 同編號**，描述「(日期) 由誰實際執行了什麼」。
+- **Check 第 1 點 = 完整分析論述段**：含「本季共 N 例、最多發生 X、密度 X.XX‰、原因為 Y、佔比 Z%」，要把第一步的分析結論濃縮寫進來。後續 Check 點對應 Do 同編號，描述「(日期) 查核結果+數據」。
+- **Check 最後一點固定是「機構會議中已說明」**，覆述第 1 點要點。
+- **Act 為總結性建議**，明確指出本季發現的主要問題，並聲明後續方向。例：「本季發現 X 為主要根因，後續續執行 Y 並加強 Z，續執行${eventName === '跌倒事件' ? '住民預防跌倒' : eventName === '感染事件' ? '住民預防感染' : eventName === '非計畫性住院' ? '標準' : '住民壓瘡預防'}作業程序規範。」
+
+═══════════════════════════════════
+【事件清單】（共 ${pdcaFilteredEvents.length} 筆，皆為 ${eventName} 類型）
+═══════════════════════════════════
+${eventsBlock || '（本次無篩選到的逐案事件，請完全依【參考截圖】／【原因分析】的數據撰寫）'}
+${hasImages ? `
+═══════════════════════════════════
+【參考截圖】（共 ${pdcaUploadedFiles.length} 張）— 圖中可能含統計表/趨勢圖/監測數據
+═══════════════════════════════════
+請從圖中辨識數值（百分比、件數、密度、達成率、比率等），優先採用截圖數據撰寫 Check 量化分析；若截圖與事件清單衝突，以截圖為準並在 Check 第 1 點點出差異。
+` : ''}${currentPdcaAnalysis ? `
+═══════════════════════════════════
+【原因分析（趨勢判讀）— 本份 PDCA 的核心依據，務必據此撰寫】
+═══════════════════════════════════
+${currentPdcaAnalysis}
+
+→ 本份 PDCA 的 Plan/Do/Check/Act 必須直接呼應上述原因分析：原因分析點名為超標、需改善的項目，必須成為 Plan 的重點；原因分析歸納的根因，必須成為 Check 論述段的基礎；原因分析的趨勢結論，必須反映在 Act 的後續方向。
+` : ''}${thresholdText ? `
+═══════════════════════════════════
+【閾值設定】（用於判斷指標是否超標、是否需寫入 PDCA）
+═══════════════════════════════════
+${thresholdText}
+
+→ 比對參考截圖／事件統計的實際數據與上述閾值：已超標的指標必須在 PDCA 中重點改善；未超標者可簡略帶過或不列入。
+` : ''}
+═══════════════════════════════════
+【撰寫格式樣板 — 機構慣用版型，沿用條列數量、編號、語氣】
+建議篇幅：${tpl.pointHint}
+═══════════════════════════════════
+
+【Plan 樣板】
+${tpl.plan}
+
+【Do 樣板】
+${tpl.do}
+
+【Check 樣板】
+${tpl.check}
+
+【Act 樣板】
+${tpl.act}
+
+═══════════════════════════════════
+【硬性規則】
+═══════════════════════════════════
+1. 完全沿用上方樣板的條列編號、句首日期格式、句末括號數據格式、用語語氣。
+2. 樣板中所有「日期欄位」（包含 　年　月　日、　/　/　、　年　月、　月底前、　月底、__月、　/　~　/　、　/　前 等）**必須完全保留留白格式**，禁止填入任何具體年/月/日。可量化「數字數據」（N 例、N 床、N 位、N 人次、N 次、X.XX%、X.X%、X.XX‰、X 分等）依事件清單與參考截圖實況填入；無資料時保留 N / X.XX% 格式。
+3. Plan ↔ Do ↔ Check 必須**逐點對應**（第 N 點主題相同）。
+4. **每一點都必須與分析結論有因果連結**，不要寫空話樣板。
+5. Check 第 1 點 = 完整分析論述段（含本季 N 例、最高發子類型、密度、佔比、根因），最後一點 = 機構會議覆述。
+6. Act 必須是「依分析推出的下一步」，呼應第 1 點分析。
+7. 內容須緊扣「${eventName}」，不可泛談其他類別。
+8. 每點以「N.」編號開頭（N 從 1 起算）。⚠️【換行硬性規定】plan/do/check/act 每個欄位字串中，每一個條列點之間都必須有「真正的換行符號（\\n）」。嚴禁把多個條列點連寫在同一行。
+
+═══════════════════════════════════
+【輸入有效性檢查（重要）】
+═══════════════════════════════════
+若有上傳【參考截圖】，請先判讀截圖內容，依下列規則決定 inputError：
+(a) 【選錯類別】若截圖其實是「其他類別」的指標統計表 —— 目前選的是【${eventName}】，但截圖內容屬於其他主題（如：感染指標、泌尿道、壓傷指標、約束指標、跌倒指標、非計畫性住院指標…）—— 請在 inputError 填：「這張截圖看起來是『（指出截圖實際屬於哪一類指標）』，但你目前選擇的是『${eventName} PDCA』，請切換到對應的類別後再試。」
+(b) 【內容不符】若截圖根本不是品質指標／統計表／事件清單（例如照片、無關文件或其他主題），請在 inputError 填：「您匯入的截圖內容似乎與品質分析無關（簡述截圖實際看到的內容），請確認是否匯錯圖片。」
+(c) 【相符】若截圖內容確實與【${eventName}】相符（含本類別的數據列即可），或沒有上傳截圖但有事件清單可分析，inputError 一律回空字串 ""。
+只要 inputError 非空字串，plan/do/check/act 一律回空字串 ""。
+
+═══════════════════════════════════
+【輸出格式】
+═══════════════════════════════════
+純 JSON，結構為 { plan: string, do: string, check: string, act: string, inputError: string }。每欄字串內可包含換行。
+        `;
+
+        // 組裝 multimodal parts：文字 prompt + N 張參考圖
+        const parts = [{ text: promptText }];
+        for (const f of pdcaUploadedFiles) {
+          try {
+            const b64 = await fileToBase64(f);
+            parts.push({ inlineData: { data: b64, mimeType: f.type } });
+          } catch (e) {
+            console.warn('PDCA 參考圖讀取失敗', f.name, e);
+          }
+        }
+
+        const response = await fetchWithRetry(GEMINI_PROXY_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { plan: { type: "STRING" }, do: { type: "STRING" }, check: { type: "STRING" }, act: { type: "STRING" }, inputError: { type: "STRING" } } } } })
+        });
+        if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
+        const pdcaResult = JSON.parse((await response.json()).candidates[0].content.parts[0].text);
+        // 匯入內容不符 → 直接提醒，不產出
+        if (pdcaResult.inputError && pdcaResult.inputError.trim()) { alert('⚠️ ' + pdcaResult.inputError.trim()); return; }
+        currentPdcaResult = pdcaResult;
+      } catch (err) { console.error(err); alert('PDCA產生失敗'); } finally { setLoadingState('pdca', false); }
+    };
+
+    window.handleSavePDCAReport = async function() {
+      if (!currentPdcaResult) return;
+      const gasUrl = getGasUrl();
+      if (gasUrl) {
+        try {
+          showToast('正在上傳報告至資料庫...');
+          const sDate = document.getElementById('pdca-start-date').value;
+          const eDate = document.getElementById('pdca-end-date').value;
+          const dateRange = (sDate && eDate) ? `${sDate} ~ ${eDate}` : '全部紀錄';
+
+          const eventName = EVENT_MODES.find(m => m.id === currentPdcaEventMode)?.name || '';
+          const payload = {
+             action: editingPdcaId ? "updatePDCA" : "savePDCA",
+             ward: currentLoggedWard,
+             id: editingPdcaId || Date.now(),
+             timestamp: new Date().toLocaleString('zh-TW'),
+             dateRange: dateRange,
+             eventsCount: pdcaFilteredEvents.length,
+             eventMode: currentPdcaEventMode,
+             eventTypeLabel: eventName,
+             causeAnalysis: currentPdcaAnalysis || '',
+             plan: currentPdcaResult.plan,
+             do: currentPdcaResult.do,
+             check: currentPdcaResult.check,
+             act: currentPdcaResult.act
+          };
+          const res = await fetchWithRetry(gasUrl, { method: 'POST', body: JSON.stringify(payload), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+          if(!res) throw new Error("無回應");
+          showToast(editingPdcaId ? 'PDCA 報告已更新！' : 'PDCA 報告已儲存！');
+          await fetchPDCAFromCloud();
+          startNewPDCA();
+        } catch (err) { showToast('雲端同步失敗。'); }
+      }
+    };
+
+    // ================= 新增：PDCA 單欄位重新生成 =================
+    window.handleRegeneratePDCAField = async function(field) {
+      if (!currentPdcaResult) return;
+      const apiKey = ""; // 已移除，改由 Supabase 代理
+      document.getElementById(`loading-pdca-${field}`)?.classList.replace('hidden', 'flex');
+
+      try {
+        const eventName = EVENT_MODES.find(m => m.id === currentPdcaEventMode)?.name || '異常事件';
+        const tpl = getPdcaStyleTemplate(currentPdcaEventMode);
+        const fieldTemplate = tpl[field] || '';
+        const eventsSummary = pdcaFilteredEvents.map((e, i) => `[${i + 1}] ${e.eventType}\n  住民: ${e.residentName || '未填'}　床號: ${e.bedNumber || '未填'}\n  原因: ${e.rootCause}\n  措施: ${e.improvement}\n  追蹤: ${e.followUp || ''}`).join('\n\n');
+        const hasImages = pdcaUploadedFiles.length > 0;
+        const thresholdText = serializeThresholds();
+
+        let promptText = `
+你是一位資深長照機構護理督導。請依【事件清單】與【參考截圖】（若有提供），僅重新生成 PDCA 報告的「${field}」欄位。
+**核心要求：產出必須是「分析推論型」內容，每一點要與事件清單分析發現有明確因果連結，不要寫空話樣板。**
+
+═══════════════════════════════════
+【內部分析（先想清楚再寫）】
+═══════════════════════════════════
+1. 本季【${eventName}】最高發的子類型/部位/情境是什麼？
+2. 各子類型的件數、密度、佔比、根因？（截圖有提供則優先採用）
+3. 高風險族群特徵？
+4. 此次「${field}」欄位要呼應哪 3–5 個關鍵分析點？
+
+【欄位寫作要點】
+- 若 field 是 plan：每點必須呼應分析發現，例「因本季 N 例中 N 例為 X 原因，故預於　月底前針對 X 加強 Y 稽核」。
+- 若 field 是 do：對應 plan 同編號，描述「(日期) 由誰實際執行了什麼」。
+- 若 field 是 check：第 1 點 = 完整分析論述段（本季 N 例/最高發 X/密度 X.XX‰/原因 Y/佔比 Z%）；後續對應 do 同編號；最後一點 = 機構會議覆述。
+- 若 field 是 act：總結性建議，明確指出本季發現的主要問題並聲明後續方向。
+
+═══════════════════════════════════
+【事件清單】（共 ${pdcaFilteredEvents.length} 筆，皆為 ${eventName} 類型）
+═══════════════════════════════════
+${eventsSummary}
+${hasImages ? `
+═══════════════════════════════════
+【參考截圖】（共 ${pdcaUploadedFiles.length} 張）
+═══════════════════════════════════
+請從圖中辨識數值（百分比、件數、密度、達成率），優先採用截圖數據撰寫量化分析。
+` : ''}${currentPdcaAnalysis ? `
+═══════════════════════════════════
+【原因分析（趨勢判讀）— 上游依據，可能含使用者手動修改，重新生成務必對齊】
+═══════════════════════════════════
+${currentPdcaAnalysis}
+
+→ 本次重新生成的「${field}」必須直接呼應上述原因分析的結論（超標項目、根因、趨勢）。
+` : ''}${thresholdText ? `
+═══════════════════════════════════
+【閾值設定】（判斷指標是否超標）
+═══════════════════════════════════
+${thresholdText}
+` : ''}
+═══════════════════════════════════
+【「${field}」欄位風格樣板 — 沿用編號、條列數量、語氣、用詞範例】
+═══════════════════════════════════
+${fieldTemplate}
+
+═══════════════════════════════════
+【目前其他欄位內容（可能含使用者手動修改，重新生成必須與其逐點對齊聯動）】
+═══════════════════════════════════
+原因分析: ${currentPdcaAnalysis || '（未產生）'}
+Plan: ${currentPdcaResult.plan}
+Do: ${currentPdcaResult.do}
+Check: ${currentPdcaResult.check}
+Act: ${currentPdcaResult.act}
+
+═══════════════════════════════════
+【硬性規則】
+═══════════════════════════════════
+1. 沿用樣板的條列編號、句首日期格式、句末括號數據格式、用語語氣與用詞範例 — 與初次產生時完全一致，不可偏離版型。
+2. 日期欄位（　年　月　日、　/　/　、　年　月、　月底前、__月、　/　~　/　、　/　前 等）**必須完全保留留白格式**，禁止填入任何具體日期。
+3. 可量化「數字數據」（N 例、N 床、X.XX%、X.XX‰、X 分等）若事件清單與參考截圖可推斷則填入實際值，否則保留 N / X.XX% 格式。
+4. 必須與「原因分析」及另外三個欄位逐點主題對應、保持聯動一致。
+5. **每一點必須與分析結論有因果連結，不要寫空話**。
+6. 內容須緊扣「${eventName}」，不可泛談其他類別。
+7. 每點以「N.」編號開頭（N 從 1 起算）。⚠️【換行硬性規定】輸出的字串值中，每一個條列點之間都必須有「真正的換行符號（\\n）」。嚴禁把多個條列點連寫在同一行。
+
+═══════════════════════════════════
+【輸出格式】
+═══════════════════════════════════
+純 JSON，結構為 { ${field}: string }。
+        `;
+
+        const parts = [{ text: promptText }];
+        for (const f of pdcaUploadedFiles) {
+          try {
+            const b64 = await fileToBase64(f);
+            parts.push({ inlineData: { data: b64, mimeType: f.type } });
+          } catch (e) {
+            console.warn('PDCA 參考圖讀取失敗', f.name, e);
+          }
+        }
+
+        const response = await fetchWithRetry(GEMINI_PROXY_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { [field]: { type: "STRING" } } } } })
+        });
+        if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
+
+        pushRegenHistory(field, currentPdcaResult[field]); // 先存舊版供「復原」
+        currentPdcaResult[field] = JSON.parse((await response.json()).candidates[0].content.parts[0].text)[field];
+        document.getElementById(`res-pdca-${field}`).innerHTML = normalizePdcaText(currentPdcaResult[field]).split('\n').filter(l=>l.trim()).map(l=>`<p class="text-sm text-slate-600 mb-3">${l.trim()}</p>`).join('');
+      } catch (err) { alert('重新生成失敗'); } finally { document.getElementById(`loading-pdca-${field}`)?.classList.replace('flex', 'hidden'); }
+    };
+
+    window.handleCopyPDCAField = function(field) {
+      let text = field === 'causeAnalysis' ? currentPdcaAnalysis : (currentPdcaResult && currentPdcaResult[field]);
+      if(!text) return;
+      navigator.clipboard.writeText(normalizePdcaText(text).split('\n').filter(l=>l.trim()).join('\n\n')).then(()=>showToast('已複製！')).catch(()=>showToast('複製失敗'));
+    };
+
+    window.handleExportPDCA = function() {
+      if (!currentPdcaResult && !currentPdcaAnalysis) return;
+      const fmt = t => t ? normalizePdcaText(t).split('\n').filter(l=>l.trim()).join('\n\n') : '';
+      let content = `【PDCA 品質報告】\n`;
+      if (currentPdcaAnalysis) content += `\n■ 原因分析（趨勢判讀）：\n${fmt(currentPdcaAnalysis)}\n`;
+      if (currentPdcaResult) content += `\n[P] Plan 計畫：\n${fmt(currentPdcaResult.plan)}\n\n[D] Do 執行：\n${fmt(currentPdcaResult.do)}\n\n[C] Check 查核：\n${fmt(currentPdcaResult.check)}\n\n[A] Act 行動：\n${fmt(currentPdcaResult.act)}`;
+      downloadTxt(content, `PDCA報告`);
+    };
+
+    // ================= UI 更新 =================
+    // 將 AI 產出文字正規化：在每個編號「N.」前補換行，修正條列未換行問題
+    function normalizePdcaText(t) {
+      if (!t) return '';
+      const TRACK_LABELS = ['出院追蹤','看門診回診追蹤','就醫回診追蹤','門診追蹤','結案追蹤'];
+      let s = String(t).replace(/\r/g, '');
+      // 1. 在編號「N.」前插入換行（N=1~99；其後非數字，避免切到 1.29 這類小數）
+      s = s.replace(/(\d{1,2})\.(?!\d)\s*/g, '\n$1. ');
+      // 2. 在追蹤節點固定標籤前插入換行（住院/感染/壓傷/跌倒 followUp 模板）
+      s = s.replace(new RegExp('\\s*(' + TRACK_LABELS.join('|') + ')\\s*（', 'g'), '\n$1（');
+      // 3. 在 followUp 條列點日期標記「（ 　/…」（括號後接空白與斜線）前插入換行；
+      //    但若「（」前緊接追蹤標籤（如「出院追蹤（ 　/…」）或緊接「N.」編號（如「1. （ 　/…」），不可拆開
+      s = s.replace(/（[\s　]*\//g, function(m, offset, str){
+        const before = str.slice(Math.max(0, offset - 10), offset);
+        for (let i = 0; i < TRACK_LABELS.length; i++) { if (before.endsWith(TRACK_LABELS[i])) return m; }
+        if (/\d+\.\s*$/.test(before)) return m; // 已由「N.」開頭的同一列，不再拆開
+        return '\n' + m;
+      });
+      return s.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+    }
+
+    // ================= 日期 helper =================
+    function todayDateStr() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+    // 把各種日期字串轉成 <input type="date"> 用的 YYYY-MM-DD
+    function toDateInputValue(str) {
+      if (!str) return todayDateStr();
+      const m = String(str).match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
+      if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return todayDateStr();
+    }
+
+    // ================= 重新生成「復原」功能 =================
+    // 重新生成前先把舊內容存入堆疊；不喜歡新結果可按 ↩ 還原
+    function pushRegenHistory(field, oldVal) {
+      if (oldVal == null || String(oldVal).trim() === '') return;
+      if (!regenHistory[field]) regenHistory[field] = [];
+      regenHistory[field].push(oldVal);
+      if (regenHistory[field].length > 15) regenHistory[field].shift(); // 限制深度
+      updateUndoButtons();
+    }
+    // 依堆疊狀態顯示/隱藏各欄位的 ↩ 復原按鈕
+    function updateUndoButtons() {
+      ['rootCause', 'improvement', 'followUp', 'causeAnalysis', 'plan', 'do', 'check', 'act'].forEach(f => {
+        const btn = document.getElementById('undo-btn-' + f);
+        if (!btn) return;
+        const n = (regenHistory[f] || []).length;
+        if (n > 0) { btn.classList.remove('hidden'); btn.title = `復原上一個版本（可往回 ${n} 步）`; }
+        else { btn.classList.add('hidden'); }
+      });
+    }
+    // 點 ↩ ：把欄位還原成上一個版本
+    window.handleUndo = function(field) {
+      const stack = regenHistory[field];
+      if (!stack || !stack.length) { showToast('沒有可復原的版本'); return; }
+      const prev = stack.pop();
+      if (field === 'causeAnalysis') {
+        currentPdcaAnalysis = prev;
+      } else if (['plan', 'do', 'check', 'act'].includes(field)) {
+        if (currentPdcaResult) currentPdcaResult[field] = prev;
+      } else {
+        if (currentEventResult) currentEventResult[field] = prev;
+      }
+      updateResultDisplay();
+      updateUndoButtons();
+      showToast('已復原到前一個版本');
+    };
+
+    function downloadTxt(content, prefix) {
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
+      link.download = `${prefix}_${new Date().getTime()}.txt`;
+      link.click();
+    }
+
+    window.setLoadingState = function(type, isLoading) {
+      document.getElementById(type === 'add-event' ? 'analyze-btn-text' : 'generate-pdca-text').style.display = isLoading ? 'none' : 'flex';
+      document.getElementById(type === 'add-event' ? 'analyze-btn-loading' : 'generate-pdca-loading').style.display = isLoading ? 'flex' : 'none';
+      document.getElementById(type === 'add-event' ? 'analyze-btn' : 'generate-pdca-btn').disabled = isLoading;
+      if(isLoading) {
+         document.getElementById('loading-state').classList.remove('hidden');
+         ['empty-state-event','empty-state-pdca','result-event-content','result-pdca-content'].forEach(id=>document.getElementById(id).classList.add('hidden'));
+      } else {
+         document.getElementById('loading-state').classList.add('hidden');
+         updateResultDisplay();
+      }
+    };
+
+    function updateResultDisplay() {
+      document.getElementById('loading-state').classList.add('hidden');
+      ['empty-state-event','empty-state-pdca','result-event-content','result-pdca-content'].forEach(id=>document.getElementById(id).classList.add('hidden'));
+      updateUndoButtons();
+
+      const fmt = t => (t||'').split('\n').filter(l=>l.trim()).map(l=>`<p class="text-sm text-slate-600 mb-3">${l.trim()}</p>`).join('');
+
+      if (currentTab === 'add-event') {
+        updateImageSummaryDisplay();
+        if (currentEventResult) {
+          document.getElementById('result-event-content').classList.remove('hidden');
+          document.getElementById('res-deidentified').innerText = currentEventResult.deIdentifiedText;
+          document.getElementById('res-event-type').innerHTML = `<p class="text-sm text-slate-600">${currentEventResult.eventType}</p>`;
+          document.getElementById('res-root-cause').innerHTML = fmt(normalizePdcaText(currentEventResult.rootCause)) + `<div id="loading-rootCause" class="absolute inset-0 bg-rose-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
+          document.getElementById('res-improvement').innerHTML = fmt(normalizePdcaText(currentEventResult.improvement)) + `<div id="loading-improvement" class="absolute inset-0 bg-emerald-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
+          document.getElementById('res-follow-up').innerHTML = fmt(normalizePdcaText(currentEventResult.followUp)) + `<div id="loading-followUp" class="absolute inset-0 bg-amber-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
+          document.getElementById('aside-version-badge').style.display = 'block';
+        } else document.getElementById('empty-state-event').classList.remove('hidden');
+      } else if (currentTab === 'pdca') {
+        if (currentPdcaResult || currentPdcaAnalysis) {
+          document.getElementById('result-pdca-content').classList.remove('hidden');
+          // 原因分析卡片
+          document.getElementById('res-pdca-analysis').innerHTML = (currentPdcaAnalysis
+            ? fmt(normalizePdcaText(currentPdcaAnalysis))
+            : `<p class="text-sm text-slate-400">尚未產生原因分析。建議先上傳參考截圖，再按下方「步驟一：產生原因分析」。</p>`)
+            + `<div id="loading-pdca-analysis" class="absolute inset-0 bg-orange-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-orange-600"></i></div>`;
+          // PDCA 四欄（尚未生成 PDCA 時隱藏）
+          const fieldsWrap = document.getElementById('pdca-fields-wrap');
+          if (currentPdcaResult) {
+            if (fieldsWrap) fieldsWrap.style.display = '';
+            document.getElementById('res-pdca-plan').innerHTML = fmt(normalizePdcaText(currentPdcaResult.plan)) + `<div id="loading-pdca-plan" class="absolute inset-0 bg-indigo-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-indigo-600"></i></div>`;
+            document.getElementById('res-pdca-do').innerHTML = fmt(normalizePdcaText(currentPdcaResult.do)) + `<div id="loading-pdca-do" class="absolute inset-0 bg-sky-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-sky-600"></i></div>`;
+            document.getElementById('res-pdca-check').innerHTML = fmt(normalizePdcaText(currentPdcaResult.check)) + `<div id="loading-pdca-check" class="absolute inset-0 bg-teal-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-teal-600"></i></div>`;
+            document.getElementById('res-pdca-act').innerHTML = fmt(normalizePdcaText(currentPdcaResult.act)) + `<div id="loading-pdca-act" class="absolute inset-0 bg-violet-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-violet-600"></i></div>`;
+          } else {
+            if (fieldsWrap) fieldsWrap.style.display = 'none';
+          }
+        } else document.getElementById('empty-state-pdca').classList.remove('hidden');
+      }
+    }
+
+    function updatePDCABadge() {
+      const badge = document.getElementById('pdca-badge');
+      const pdcaBtn = document.getElementById('generate-pdca-btn');
+      const anaBtn = document.getElementById('generate-analysis-btn');
+      const hasEvents = pdcaFilteredEvents.length > 0;
+      // beta：有篩選到的事件「或」有上傳參考截圖，皆可生成
+      const canGenerate = hasEvents || pdcaUploadedFiles.length > 0;
+      // 徽章仍顯示事件數
+      if (hasEvents) { badge.innerText = pdcaFilteredEvents.length; badge.classList.remove('hidden'); }
+      else { badge.classList.add('hidden'); }
+      if (canGenerate) {
+        pdcaBtn.disabled = false;
+        pdcaBtn.className = "w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all duration-200 shadow-lg bg-teal-600 hover:bg-teal-700 text-white shadow-teal-600/30";
+        if (anaBtn) {
+          anaBtn.disabled = false;
+          anaBtn.className = "w-full py-3.5 rounded-xl font-bold text-base flex items-center justify-center gap-3 transition-all duration-200 shadow-lg bg-orange-500 hover:bg-orange-600 text-white";
+        }
+      } else {
+        pdcaBtn.disabled = true;
+        pdcaBtn.className = "w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 shadow-lg bg-teal-400 text-white cursor-not-allowed";
+        if (anaBtn) {
+          anaBtn.disabled = true;
+          anaBtn.className = "w-full py-3.5 rounded-xl font-bold text-base flex items-center justify-center gap-3 shadow-lg bg-orange-300 text-white cursor-not-allowed";
+        }
+      }
+    }
+
+    function renderSavedEvents() {
+      if (pdcaFilteredEvents.length === 0) {
+        document.getElementById('pdca-empty-state').classList.remove('hidden');
+        document.getElementById('pdca-events-list').classList.add('hidden');
+      } else {
+        document.getElementById('pdca-empty-state').classList.add('hidden');
+        document.getElementById('pdca-events-list').classList.remove('hidden');
+        document.getElementById('pdca-events-list').innerHTML = pdcaFilteredEvents.map(evt => {
+          let displayDate = evt.saveDate;
+          const d = new Date(evt.saveDate);
+          if (!isNaN(d.getTime())) displayDate = d.toLocaleDateString('zh-TW');
+          else displayDate = evt.saveDate.split(' ')[0] || '';
+          return `
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-2 relative">
+            <div class="flex justify-between items-start"><span class="bg-slate-100 text-slate-600 text-xs font-bold px-2.5 py-1 rounded-md">${displayDate}</span><span class="bg-blue-50 text-blue-600 font-bold text-sm px-3 py-1 rounded-full">${evt.eventType}</span></div>
+            ${(evt.residentName || evt.bedNumber) ? `<div class="flex items-center gap-2 text-xs mt-1"><span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><i class="ph ph-user"></i>${evt.residentName || '—'}</span><span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><i class="ph ph-bed"></i>床號 ${evt.bedNumber || '—'}</span></div>` : ''}
+            <p class="text-sm font-semibold text-slate-700 mt-2 line-clamp-2">${evt.deIdentifiedText}</p>
+          </div>`;
+        }).join('');
+      }
+    }
+  </script>
+</body>
+</html>
