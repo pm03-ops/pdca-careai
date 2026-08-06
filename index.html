@@ -66,9 +66,22 @@
         </div>
         <div class="flex flex-col gap-1.5">
           <label class="text-sm font-semibold text-slate-700">登入密碼 <span class="text-xs text-slate-400 font-normal">(預設: 1234)</span></label>
-          <input type="password" id="login-pwd" class="w-full px-4 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none" placeholder="請輸入密碼">
+          <input type="password" id="login-pwd" class="w-full px-4 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none" placeholder="請輸入密碼" onkeydown="if(event.key==='Enter') handleLogin()">
         </div>
-        
+
+        <!-- 資料庫連線設定：首次使用需填寫，之後自動記住 -->
+        <details id="login-gas-details" class="w-full border border-slate-200 rounded-xl bg-slate-50 overflow-hidden">
+          <summary class="px-4 py-2.5 text-sm font-semibold text-slate-600 cursor-pointer select-none flex items-center gap-2">
+            <i class="ph ph-database text-base"></i> 資料庫連線設定
+            <span id="login-gas-status" class="ml-auto text-xs font-normal"></span>
+          </summary>
+          <div class="px-4 pb-3 pt-1 flex flex-col gap-1.5">
+            <label class="text-xs text-slate-500">Google Apps Script 網址（首次使用必填）</label>
+            <input type="text" id="login-gas-url" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none" placeholder="https://script.google.com/macros/s/.../exec">
+            <p class="text-[11px] text-slate-400 leading-relaxed">此網址只會存在你自己的瀏覽器，不會上傳。填一次即可，之後自動記住。</p>
+          </div>
+        </details>
+
         <button id="login-btn" onclick="handleLogin()" class="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 px-4 rounded-xl transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-2">
           <i id="login-btn-icon" class="ph ph-sign-in text-xl"></i> <span id="login-btn-text">進入系統</span>
         </button>
@@ -699,12 +712,16 @@
     // 已停用的舊部署網址（localStorage 若仍快取這些，會自動改用最新的 DEFAULT_GAS_URL）
     const DEPRECATED_GAS_URLS = [];
 
+    // 判斷網址是否為無效/預設/已停用
+    function isBadGasUrl(url) {
+        return !url || url.trim() === '' || url.includes('...') || DEPRECATED_GAS_URLS.includes(url.trim());
+    }
     // 確保不會讀取到無效或預設的網址
+    // 讀取優先序：該機構專屬 → 全機構共用(careai_gas_url_global) → 內建預設
     function getGasUrl(ward = currentLoggedWard) {
         let url = localStorage.getItem(`careai_gas_url_${ward}`);
-        if (!url || url.trim() === '' || url.includes('...') || DEPRECATED_GAS_URLS.includes(url.trim())) {
-            return DEFAULT_GAS_URL;
-        }
+        if (isBadGasUrl(url)) url = localStorage.getItem('careai_gas_url_global');
+        if (isBadGasUrl(url)) return DEFAULT_GAS_URL;
         return url.trim();
     }
 
@@ -1039,6 +1056,19 @@
       // 一併清除任何殘留的登入狀態與舊密碼快取（避免免密碼進入）。
       localStorage.removeItem('careai_logged_in_ward');
       WARD_LIST.forEach(w => localStorage.removeItem(`careai_pwd_${w}`));
+
+      // 帶出已儲存的 GAS 網址；若尚未設定，預設展開連線設定提示使用者填寫
+      const savedGas = getGasUrl(wardSelect.value);
+      const loginGasInput = document.getElementById('login-gas-url');
+      const loginGasDetails = document.getElementById('login-gas-details');
+      const loginGasStatus = document.getElementById('login-gas-status');
+      if (!isBadGasUrl(savedGas)) {
+        if (loginGasInput) loginGasInput.value = savedGas;
+        if (loginGasStatus) { loginGasStatus.textContent = '已設定 ✓'; loginGasStatus.className = 'ml-auto text-xs font-normal text-emerald-600'; }
+      } else {
+        if (loginGasDetails) loginGasDetails.open = true;
+        if (loginGasStatus) { loginGasStatus.textContent = '尚未設定'; loginGasStatus.className = 'ml-auto text-xs font-normal text-amber-600'; }
+      }
     };
 
     window.setDefaultQuarterDates = function() {
@@ -1061,6 +1091,20 @@
       const btnIcon = document.getElementById('login-btn-icon');
       const btnText = document.getElementById('login-btn-text');
       const btn = document.getElementById('login-btn');
+
+      // 先把登入畫面上填的 GAS 網址存起來（全機構共用），再進行驗證
+      const loginGasInput = document.getElementById('login-gas-url');
+      if (loginGasInput && loginGasInput.value.trim() && !isBadGasUrl(loginGasInput.value)) {
+        localStorage.setItem('careai_gas_url_global', loginGasInput.value.trim());
+      }
+
+      // 沒有可用的資料庫網址就擋下來，並提示填寫
+      if (isBadGasUrl(getGasUrl(ward))) {
+        alert('請先於下方「資料庫連線設定」填入 Google Apps Script 網址，才能登入。');
+        const d = document.getElementById('login-gas-details'); if (d) d.open = true;
+        if (loginGasInput) loginGasInput.focus();
+        return;
+      }
 
       btn.disabled = true;
       btnIcon.className = "ph ph-spinner animate-spin text-xl";
@@ -1315,7 +1359,10 @@
     window.closeSettingsModal = function() { document.getElementById('settings-modal').classList.replace('flex', 'hidden'); };
     window.saveAndCloseSettings = function() {
       if(!currentLoggedWard) return;
-      localStorage.setItem(`careai_gas_url_${currentLoggedWard}`, document.getElementById('setting-gas-url').value.trim());
+      const gasVal = document.getElementById('setting-gas-url').value.trim();
+      localStorage.setItem(`careai_gas_url_${currentLoggedWard}`, gasVal);
+      // 同步寫入全機構共用網址，讓登入畫面與其他機構也能沿用
+      if (gasVal && !isBadGasUrl(gasVal)) localStorage.setItem('careai_gas_url_global', gasVal);
       localStorage.setItem(`careai_measures_${currentLoggedWard}`, document.getElementById('setting-current-measures').value.trim());
       localStorage.setItem(`careai_tools_${currentLoggedWard}`, document.getElementById('setting-available-tools').value.trim());
       localStorage.setItem(`careai_staffing_${currentLoggedWard}`, document.getElementById('setting-staffing-family').value.trim());
