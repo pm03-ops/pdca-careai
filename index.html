@@ -150,8 +150,10 @@
                 <i class="ph ph-folder-open"></i> 歷史紀錄
               </button>
             </div>
-            <div class="flex bg-slate-200 p-1 rounded-lg shrink-0 shadow-inner overflow-x-auto max-w-full" id="api-version-selector">
-              <!-- V1.0～V3.0 已隱藏（保留程式碼與功能記錄，僅不對外顯示）；如需重新顯示，移除各按鈕的 hidden 類別即可 -->
+            <!-- 版本選擇列整條隱藏：不對外顯示任何版本號，內部仍以 currentApiVersion(預設 v4.0) 運作。
+                 保留完整程式碼與按鈕記錄；如需重新顯示整條列，移除此 div 的 hidden 類別即可。 -->
+            <div class="hidden bg-slate-200 p-1 rounded-lg shrink-0 shadow-inner overflow-x-auto max-w-full" id="api-version-selector">
+              <!-- V1.0～V3.0 亦保留但隱藏；如需個別顯示，移除該按鈕的 hidden 類別 -->
               <button onclick="setApiVersion('v1.0')" data-version="v1.0" class="version-btn hidden px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V1.0 樣板</button>
               <button onclick="setApiVersion('v2.0')" data-version="v2.0" class="version-btn hidden px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V2.0 專業</button>
               <button onclick="setApiVersion('v3.0')" data-version="v3.0" class="version-btn hidden px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V3.0 嚴謹</button>
@@ -2449,7 +2451,8 @@ Act: ${currentPdcaResult.act}
           document.getElementById('res-root-cause').innerHTML = fmt(normalizePdcaText(currentEventResult.rootCause)) + `<div id="loading-rootCause" class="absolute inset-0 bg-rose-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
           document.getElementById('res-improvement').innerHTML = fmt(normalizePdcaText(currentEventResult.improvement)) + `<div id="loading-improvement" class="absolute inset-0 bg-emerald-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
           document.getElementById('res-follow-up').innerHTML = fmt(normalizePdcaText(currentEventResult.followUp)) + `<div id="loading-followUp" class="absolute inset-0 bg-amber-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
-          document.getElementById('aside-version-badge').style.display = 'block';
+          // 版本號不對外顯示（後台仍知道 currentApiVersion）；badge 維持隱藏
+          document.getElementById('aside-version-badge').style.display = 'none';
         } else document.getElementById('empty-state-event').classList.remove('hidden');
       } else if (currentTab === 'pdca') {
         if (currentPdcaResult || currentPdcaAnalysis) {
