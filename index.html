@@ -69,19 +69,6 @@
           <input type="password" id="login-pwd" class="w-full px-4 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none" placeholder="請輸入密碼" onkeydown="if(event.key==='Enter') handleLogin()">
         </div>
 
-        <!-- 資料庫連線設定：首次使用需填寫，之後自動記住 -->
-        <details id="login-gas-details" class="w-full border border-slate-200 rounded-xl bg-slate-50 overflow-hidden">
-          <summary class="px-4 py-2.5 text-sm font-semibold text-slate-600 cursor-pointer select-none flex items-center gap-2">
-            <i class="ph ph-database text-base"></i> 資料庫連線設定
-            <span id="login-gas-status" class="ml-auto text-xs font-normal"></span>
-          </summary>
-          <div class="px-4 pb-3 pt-1 flex flex-col gap-1.5">
-            <label class="text-xs text-slate-500">Google Apps Script 網址（首次使用必填）</label>
-            <input type="text" id="login-gas-url" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none" placeholder="https://script.google.com/macros/s/.../exec">
-            <p class="text-[11px] text-slate-400 leading-relaxed">此網址只會存在你自己的瀏覽器，不會上傳。填一次即可，之後自動記住。</p>
-          </div>
-        </details>
-
         <button id="login-btn" onclick="handleLogin()" class="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 px-4 rounded-xl transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-2">
           <i id="login-btn-icon" class="ph ph-sign-in text-xl"></i> <span id="login-btn-text">進入系統</span>
         </button>
@@ -587,9 +574,6 @@
           </div>
         </div>
         <div class="border-t border-slate-100"></div>
-        <div class="space-y-3 bg-blue-50/50 p-4 rounded-xl border border-blue-100 hidden">
-          <input type="text" id="setting-gas-url" placeholder="https://script.google.com/macros/s/.../exec">
-        </div>
         <div class="space-y-3">
           <h4 class="font-bold text-slate-700 flex items-center gap-2 text-sm"><i class="ph ph-toolbox text-lg"></i> AI 資源預設</h4>
           <p class="text-xs text-slate-500 leading-relaxed">這些內容將作為 AI 提供具體改善建議時的背景參考資訊。</p>
@@ -704,26 +688,14 @@
     let cloudPdcaList = [];
     let pdcaFilteredEvents = []; 
 
-    // ⚙️ Supabase Gemini 代理網址（部署 Edge Function 後填入；金鑰放 Supabase 後端，不寫在此）
-    const GEMINI_PROXY_URL = "https://utsclnrplcophshpvbdi.supabase.co/functions/v1/gemini-proxy";
-    // 資料後端(Google Apps Script)網址：公開版不寫死，請登入後於「系統與資源設定」填入
-    const DEFAULT_GAS_URL = "";
+    // ⚙️ Supabase 後端網址（金鑰皆放 Supabase 伺服器端，不寫在此）
+    const GEMINI_PROXY_URL = "https://utsclnrplcophshpvbdi.supabase.co/functions/v1/gemini-proxy"; // AI 代理
+    const DATA_API_URL     = "https://utsclnrplcophshpvbdi.supabase.co/functions/v1/data-api";     // 資料後端（取代 GAS）
 
-    // 已停用的舊部署網址（localStorage 若仍快取這些，會自動改用最新的 DEFAULT_GAS_URL）
-    const DEPRECATED_GAS_URLS = [];
-
-    // 判斷網址是否為無效/預設/已停用
-    function isBadGasUrl(url) {
-        return !url || url.trim() === '' || url.includes('...') || DEPRECATED_GAS_URLS.includes(url.trim());
-    }
-    // 確保不會讀取到無效或預設的網址
-    // 讀取優先序：該機構專屬 → 全機構共用(careai_gas_url_global) → 內建預設
-    function getGasUrl(ward = currentLoggedWard) {
-        let url = localStorage.getItem(`careai_gas_url_${ward}`);
-        if (isBadGasUrl(url)) url = localStorage.getItem('careai_gas_url_global');
-        if (isBadGasUrl(url)) return DEFAULT_GAS_URL;
-        return url.trim();
-    }
+    // 資料後端統一指向 Supabase data-api（不再使用 Google Apps Script）。
+    // 保留函式名稱與 isBadGasUrl 讓其他呼叫端與舊邏輯無需大改。
+    function isBadGasUrl(url) { return !url || String(url).trim() === ''; }
+    function getGasUrl() { return DATA_API_URL; }
 
     const MANUAL_INPUTS_CONFIG = {
       fall: [{ key: 'fall_diagnosis', label: '主要診斷' }, { key: 'fall_adl', label: 'ADL分數' }, { key: 'fall_datetime', label: '日期時間' }, { key: 'fall_location', label: '地點' }, { key: 'fall_situation', label: '情境' }, { key: 'fall_cause', label: '原因' }, { key: 'fall_restraint', label: '約束物' }, { key: 'fall_meds', label: '藥物' }, { key: 'fall_injury', label: '受傷狀況' }, { key: 'fall_part', label: '部位' }, { key: 'fall_desc', label: '狀況描述' }],
@@ -1056,19 +1028,6 @@
       // 一併清除任何殘留的登入狀態與舊密碼快取（避免免密碼進入）。
       localStorage.removeItem('careai_logged_in_ward');
       WARD_LIST.forEach(w => localStorage.removeItem(`careai_pwd_${w}`));
-
-      // 帶出已儲存的 GAS 網址；若尚未設定，預設展開連線設定提示使用者填寫
-      const savedGas = getGasUrl(wardSelect.value);
-      const loginGasInput = document.getElementById('login-gas-url');
-      const loginGasDetails = document.getElementById('login-gas-details');
-      const loginGasStatus = document.getElementById('login-gas-status');
-      if (!isBadGasUrl(savedGas)) {
-        if (loginGasInput) loginGasInput.value = savedGas;
-        if (loginGasStatus) { loginGasStatus.textContent = '已設定 ✓'; loginGasStatus.className = 'ml-auto text-xs font-normal text-emerald-600'; }
-      } else {
-        if (loginGasDetails) loginGasDetails.open = true;
-        if (loginGasStatus) { loginGasStatus.textContent = '尚未設定'; loginGasStatus.className = 'ml-auto text-xs font-normal text-amber-600'; }
-      }
     };
 
     window.setDefaultQuarterDates = function() {
@@ -1092,26 +1051,12 @@
       const btnText = document.getElementById('login-btn-text');
       const btn = document.getElementById('login-btn');
 
-      // 先把登入畫面上填的 GAS 網址存起來（全機構共用），再進行驗證
-      const loginGasInput = document.getElementById('login-gas-url');
-      if (loginGasInput && loginGasInput.value.trim() && !isBadGasUrl(loginGasInput.value)) {
-        localStorage.setItem('careai_gas_url_global', loginGasInput.value.trim());
-      }
-
-      // 沒有可用的資料庫網址就擋下來，並提示填寫
-      if (isBadGasUrl(getGasUrl(ward))) {
-        alert('請先於下方「資料庫連線設定」填入 Google Apps Script 網址，才能登入。');
-        const d = document.getElementById('login-gas-details'); if (d) d.open = true;
-        if (loginGasInput) loginGasInput.focus();
-        return;
-      }
-
       btn.disabled = true;
       btnIcon.className = "ph ph-spinner animate-spin text-xl";
       btnText.innerText = "驗證中...";
 
       try {
-        const gasUrl = getGasUrl(ward);
+        const gasUrl = getGasUrl();
         const res = await fetchWithRetry(gasUrl, {
           method: 'POST',
           body: JSON.stringify({ action: 'verifyPassword', ward: ward, password: pwdInput }),
@@ -1128,7 +1073,7 @@
         }
       } catch (err) {
         console.error(err);
-        alert('無法連線到資料庫，請檢查網路或 GAS 網址設定。');
+        alert('無法連線到資料庫，請檢查網路連線後再試。');
       } finally {
         btn.disabled = false;
         btnIcon.className = "ph ph-sign-in text-xl";
@@ -1143,7 +1088,6 @@
       document.getElementById('login-view').classList.add('opacity-0', 'pointer-events-none');
       setTimeout(() => document.getElementById('login-view').classList.add('hidden'), 300);
 
-      document.getElementById('setting-gas-url').value = getGasUrl();
       document.getElementById('setting-current-measures').value = localStorage.getItem(`careai_measures_${ward}`) || '';
       document.getElementById('setting-available-tools').value = localStorage.getItem(`careai_tools_${ward}`) || '';
       document.getElementById('setting-staffing-family').value = localStorage.getItem(`careai_staffing_${ward}`) || '';
@@ -1350,7 +1294,6 @@
 
     // ================= 設定彈窗 =================
     window.openSettingsModal = function() {
-      document.getElementById('setting-gas-url').value = getGasUrl();
       document.getElementById('setting-current-measures').value = localStorage.getItem(`careai_measures_${currentLoggedWard}`) || '';
       document.getElementById('setting-available-tools').value = localStorage.getItem(`careai_tools_${currentLoggedWard}`) || '';
       document.getElementById('setting-staffing-family').value = localStorage.getItem(`careai_staffing_${currentLoggedWard}`) || '';
@@ -1359,10 +1302,6 @@
     window.closeSettingsModal = function() { document.getElementById('settings-modal').classList.replace('flex', 'hidden'); };
     window.saveAndCloseSettings = function() {
       if(!currentLoggedWard) return;
-      const gasVal = document.getElementById('setting-gas-url').value.trim();
-      localStorage.setItem(`careai_gas_url_${currentLoggedWard}`, gasVal);
-      // 同步寫入全機構共用網址，讓登入畫面與其他機構也能沿用
-      if (gasVal && !isBadGasUrl(gasVal)) localStorage.setItem('careai_gas_url_global', gasVal);
       localStorage.setItem(`careai_measures_${currentLoggedWard}`, document.getElementById('setting-current-measures').value.trim());
       localStorage.setItem(`careai_tools_${currentLoggedWard}`, document.getElementById('setting-available-tools').value.trim());
       localStorage.setItem(`careai_staffing_${currentLoggedWard}`, document.getElementById('setting-staffing-family').value.trim());
