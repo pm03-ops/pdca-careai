@@ -151,9 +151,10 @@
               </button>
             </div>
             <div class="flex bg-slate-200 p-1 rounded-lg shrink-0 shadow-inner overflow-x-auto max-w-full" id="api-version-selector">
-              <button onclick="setApiVersion('v1.0')" data-version="v1.0" class="version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V1.0 樣板</button>
-              <button onclick="setApiVersion('v2.0')" data-version="v2.0" class="version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V2.0 專業</button>
-              <button onclick="setApiVersion('v3.0')" data-version="v3.0" class="version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V3.0 嚴謹</button>
+              <!-- V1.0～V3.0 已隱藏（保留程式碼與功能記錄，僅不對外顯示）；如需重新顯示，移除各按鈕的 hidden 類別即可 -->
+              <button onclick="setApiVersion('v1.0')" data-version="v1.0" class="version-btn hidden px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V1.0 樣板</button>
+              <button onclick="setApiVersion('v2.0')" data-version="v2.0" class="version-btn hidden px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V2.0 專業</button>
+              <button onclick="setApiVersion('v3.0')" data-version="v3.0" class="version-btn hidden px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap text-slate-500 hover:text-slate-700">V3.0 嚴謹</button>
               <button onclick="setApiVersion('v4.0')" data-version="v4.0" class="version-btn px-4 py-1.5 rounded-md text-sm font-semibold transition-all whitespace-nowrap bg-white shadow-sm text-blue-600">V4.0 務實 (落地版)</button>
             </div>
           </div>
