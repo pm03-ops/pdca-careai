@@ -1117,9 +1117,11 @@
       updateThresholdStatus();
 
       setDefaultQuarterDates();
-      startNewEvent(); 
-      startNewPDCA(); 
-      
+      startNewEvent();
+      startNewPDCA();
+      // 若本機有這個機構未儲存的草稿，顯示可忽略的「還原」提示條
+      if (window.checkForEventDraft) window.checkForEventDraft();
+
       setTimeout(async () => {
         try {
           await fetchEventsFromCloud();
@@ -1395,6 +1397,134 @@
         checkAnalyzeButtonState();
         updateResultDisplay();
     };
+
+    // ================= 自動暫存草稿（本機 localStorage，綁定機構；背景靜默、不影響填寫）=================
+    let __restoringDraft = false;   // 還原中不觸發存檔
+    let __pendingDraft = null;      // 提示條要還原的草稿快照
+    let __draftTimer = null;
+
+    function __draftKey() { return currentLoggedWard ? ('careai_draft_' + currentLoggedWard) : null; }
+
+    function __collectEventDraft() {
+      const g = id => (document.getElementById(id) ? document.getElementById(id).value : '') || '';
+      return {
+        eventMode: currentEventMode,
+        eventDate: g('event-date'),
+        residentName: g('resident-name'),
+        bedNumber: g('resident-bed'),
+        recordText: g('record-text'),
+        manualInputsData: manualInputsData,
+        selectionsData: selectionsData,
+        editingEventId: editingEventId || null,
+        result: currentEventResult || null,
+        savedAt: new Date().toISOString()
+      };
+    }
+    function __draftHasContent(d) {
+      if (!d) return false;
+      if ((d.recordText||'').trim() || (d.residentName||'').trim() || (d.bedNumber||'').trim()) return true;
+      if (d.manualInputsData && Object.values(d.manualInputsData).some(v => String(v==null?'':v).trim())) return true;
+      if (d.selectionsData && Object.values(d.selectionsData).some(v => Array.isArray(v) ? v.length : String(v==null?'':v).trim())) return true;
+      if (d.result) return true;
+      return false;
+    }
+    window.saveEventDraft = function() {
+      if (__restoringDraft || currentTab !== 'add-event') return;
+      const key = __draftKey(); if (!key) return;
+      const d = __collectEventDraft();
+      if (!__draftHasContent(d)) return;   // 空白不存
+      try { localStorage.setItem(key, JSON.stringify(d)); } catch (e) {}
+    };
+    function __scheduleEventDraftSave() {
+      if (currentTab !== 'add-event' || !currentLoggedWard) return;
+      clearTimeout(__draftTimer);
+      __draftTimer = setTimeout(window.saveEventDraft, 800);   // 去抖，打字/勾選期間不頻繁寫入
+    }
+    window.clearEventDraft = function() { const key = __draftKey(); if (key) { try { localStorage.removeItem(key); } catch (e) {} } };
+
+    function __restoreEventDraft(d) {
+      if (!d) return;
+      __restoringDraft = true;
+      try {
+        currentEventMode = d.eventMode || currentEventMode;
+        document.querySelectorAll('.mode-btn').forEach(btn => btn.className = btn.dataset.mode === currentEventMode
+          ? 'mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-blue-600 text-white shadow-md shadow-blue-200 border border-blue-600'
+          : 'mode-btn flex-1 min-w-[140px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold transition-all duration-200 bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300');
+        selectionsData = d.selectionsData || {};
+        manualInputsData = d.manualInputsData || {};
+        editingEventId = d.editingEventId || null;
+        currentEventResult = d.result || null;
+        uploadedFiles = [];
+        document.getElementById('record-text').value = d.recordText || '';
+        document.getElementById('resident-name').value = d.residentName || '';
+        document.getElementById('resident-bed').value = d.bedNumber || '';
+        document.getElementById('event-date').value = d.eventDate || todayDateStr();
+        if (editingEventId) {
+          document.getElementById('editing-badge').classList.remove('hidden');
+          document.getElementById('save-event-btn-text').innerText = '更新雲端資料與 PDCA 庫';
+        }
+        renderEventFileList();
+        updateAnalyzeBtnText();
+        renderFormOptions(); renderManualInputs(); checkAnalyzeButtonState(); updateResultDisplay();
+      } catch (e) { console.warn('還原草稿失敗', e); }
+      __restoringDraft = false;
+    }
+
+    function __ensureDraftBanner() {
+      let b = document.getElementById('draft-restore-banner');
+      if (b) return b;
+      b = document.createElement('div');
+      b.id = 'draft-restore-banner';
+      b.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:200;display:none;max-width:92vw;';
+      b.className = 'bg-white border border-amber-300 shadow-lg rounded-xl px-4 py-3 flex items-center gap-3 text-sm';
+      b.innerHTML = '<i class="ph ph-clock-counter-clockwise text-amber-500 text-xl"></i>'
+        + '<span id="draft-banner-text" class="text-slate-700">偵測到未儲存的草稿</span>'
+        + '<button onclick="applyDraftRestore()" class="bg-amber-500 hover:bg-amber-600 text-white font-bold px-3 py-1.5 rounded-lg whitespace-nowrap">還原</button>'
+        + '<button onclick="dismissDraftBanner(true)" class="text-slate-400 hover:text-slate-600 font-semibold px-2 whitespace-nowrap">捨棄</button>'
+        + '<button onclick="dismissDraftBanner(false)" title="關閉" class="text-slate-300 hover:text-slate-500"><i class="ph ph-x"></i></button>';
+      document.body.appendChild(b);
+      return b;
+    }
+    window.applyDraftRestore = function() {
+      if (__pendingDraft) __restoreEventDraft(__pendingDraft);
+      __pendingDraft = null;
+      const b = document.getElementById('draft-restore-banner'); if (b) b.style.display = 'none';
+      showToast('已還原上次未儲存的草稿');
+    };
+    window.dismissDraftBanner = function(discard) {
+      if (discard) window.clearEventDraft();
+      __pendingDraft = null;
+      const b = document.getElementById('draft-restore-banner'); if (b) b.style.display = 'none';
+    };
+    // 登入後呼叫：若該機構在本機有未儲存草稿，顯示可忽略的「還原」提示條
+    window.checkForEventDraft = function() {
+      const key = __draftKey(); if (!key) return;
+      let d = null;
+      try { const raw = localStorage.getItem(key); d = raw ? JSON.parse(raw) : null; } catch (e) { d = null; }
+      if (!__draftHasContent(d)) return;
+      __pendingDraft = d;
+      const b = __ensureDraftBanner();
+      let when = ''; try { when = new Date(d.savedAt).toLocaleString('zh-TW'); } catch (e) {}
+      const modeName = (EVENT_MODES.find(m => m.id === d.eventMode) || {}).name || '事件';
+      document.getElementById('draft-banner-text').innerHTML = '偵測到未儲存的<b>' + modeName + '</b>草稿' + (when ? '（' + when + '）' : '') + '，要還原嗎？';
+      b.style.display = 'flex';
+    };
+
+    // 掛勾：輸入/勾選時背景排程存草稿；離開頁面前立即存；AI 分析後也把結果納入草稿
+    window.addEventListener('load', function() {
+      ['input', 'change'].forEach(ev => document.addEventListener(ev, __scheduleEventDraftSave, true));
+      document.addEventListener('click', function(e) {
+        if (e.target && e.target.closest && e.target.closest('#view-add-event')) __scheduleEventDraftSave();
+      }, true);
+      window.addEventListener('beforeunload', function() { try { window.saveEventDraft(); } catch (e) {} });
+      document.addEventListener('visibilitychange', function() { if (document.visibilityState === 'hidden') { try { window.saveEventDraft(); } catch (e) {} } });
+      ['handleAnalyze', 'handleRegenerateField'].forEach(fn => {
+        const orig = window[fn];
+        if (typeof orig === 'function') {
+          window[fn] = async function() { const r = await orig.apply(this, arguments); try { window.saveEventDraft(); } catch (e) {} return r; };
+        }
+      });
+    });
 
     window.loadEventForEditing = function(id) {
         const evt = cloudEventsList.find(e => e.id == id);
@@ -1851,8 +1981,9 @@
         
         if(resData.status === 'success') {
            showToast(editingEventId ? '資料更新成功！' : '資料儲存成功！');
-           await fetchEventsFromCloud(); 
-           startNewEvent(); 
+           if (window.clearEventDraft) window.clearEventDraft();   // 已存雲端，清掉本機草稿
+           await fetchEventsFromCloud();
+           startNewEvent();
         } else throw new Error(resData.message);
       } catch (err) { console.error(err); showToast('雲端同步失敗。'); }
     };
