@@ -1858,13 +1858,24 @@
     };
 
     function buildFollowUpTrackingTemplate(mode, selections, manualInputs, rawText) {
-      const join = arr => arr.join('\n\n');
+      const join = arr => arr.filter(Boolean).join('\n\n');
+
+      // 依「護理紀錄 + 勾選項目 + 手動欄位」的實際內容判斷是否真的有住院/就醫，
+      // 沒提及就不產生出院/門診節點（避免替沒看診的長輩憑空寫門診記錄）。
+      const flat = obj => obj ? Object.values(obj).map(v => Array.isArray(v) ? v.join(' ') : String(v == null ? '' : v)).join(' ') : '';
+      const rawHay = `${rawText || ''} ${flat(selections)} ${flat(manualInputs)}`;
+      // 先移除否定語境（未就醫、無回診、無下次回診、未住院…），避免把「沒發生」誤判成有
+      const hay = rawHay.replace(/(未|無|免|沒|不需|無需|毋須|不用|不必)[^，。；、\n]{0,4}?(就醫|送醫|回診|門診|看診|複診|掛號|急診|回院|住院|入院|收治|出院)/g, ' ');
+      const hasHosp = /住院|入院|收治|轉院|辦理出院|出院/.test(hay);              // 住院／出院跡象
+      // 門診／回診／就醫跡象；送醫用負向前瞻排除「送醫院／轉送醫院」（那是住院不是門診）
+      const hasOPD  = /門診|回診|看診|複診|就醫|送醫(?!院)|掛號|急診|回院/.test(hay);
 
       if (mode === 'hospitalization') {
-        return join([TRACKING_BLOCKS.hosp_discharge, TRACKING_BLOCKS.hosp_opd, TRACKING_BLOCKS.hosp_close]);
+        // 住院事件本身即為住院 → 出院追蹤保留；門診回診僅在紀錄確有提及時才寫
+        return join([TRACKING_BLOCKS.hosp_discharge, hasOPD ? TRACKING_BLOCKS.hosp_opd : '', TRACKING_BLOCKS.hosp_close]);
       }
       if (mode === 'pressure_ulcer') {
-        return join([TRACKING_BLOCKS.pu_opd, TRACKING_BLOCKS.pu_close]);
+        return join([hasOPD ? TRACKING_BLOCKS.pu_opd : '', TRACKING_BLOCKS.pu_close]);
       }
       if (mode === 'infection') {
         const infTypeSel = (selections && selections.inf_type) || '';
@@ -1873,12 +1884,12 @@
         const isRespOrUrinary = /呼吸道|泌尿道/.test(combined);
         const isSkinOrScabies = /皮膚|傷口|疥瘡/.test(combined);
         if (isRespOrUrinary && !isSkinOrScabies) {
-          return join([TRACKING_BLOCKS.inf_resp_uri_discharge, TRACKING_BLOCKS.inf_resp_uri_opd, TRACKING_BLOCKS.inf_resp_uri_close]);
+          return join([hasHosp ? TRACKING_BLOCKS.inf_resp_uri_discharge : '', hasOPD ? TRACKING_BLOCKS.inf_resp_uri_opd : '', TRACKING_BLOCKS.inf_resp_uri_close]);
         }
-        return join([TRACKING_BLOCKS.inf_skin_opd, TRACKING_BLOCKS.inf_skin_close]);
+        return join([hasOPD ? TRACKING_BLOCKS.inf_skin_opd : '', TRACKING_BLOCKS.inf_skin_close]);
       }
       if (mode === 'fall') {
-        return join([TRACKING_BLOCKS.fall_opd, TRACKING_BLOCKS.fall_close]);
+        return join([(hasOPD || hasHosp) ? TRACKING_BLOCKS.fall_opd : '', TRACKING_BLOCKS.fall_close]);
       }
       // 安全預設：任何未列出的類型也一定要有結案追蹤
       return TRACKING_BLOCKS.generic_close;
@@ -1919,6 +1930,7 @@
           - ⚠️【日期格式固定】一律用「全形括號 + 台灣年在前」格式「（ 　/　/　）」，日期留白、不可自行填入。
           - 只有 <該節點追蹤敘述> 是「可依個案參考範本改寫」的部分：可依實際個案自然調整用字、不必逐字照抄；未知的未來資訊（就診醫院、診斷、回診結果、檢驗值等）留白（______）或寫「待追蹤」，不要編造。
           - ⚠️【節點不可刪減】範本有幾個節點就要輸出幾段，不可刪除或合併；「結案追蹤」必為最後一段，絕對不可省略。
+          - ⚠️【不可自行新增節點】範本已依實際紀錄篩選過。若範本未包含「出院追蹤／門診追蹤／回診／就醫」等節點，代表本案護理紀錄與勾選中查無住院或就醫資訊 —— 整個追蹤情形（含最前面的條列追蹤）都不得出現出院、門診、回診、就醫等內容或情境，只能依範本輸出。
           【下方追蹤節點範本（節點名稱與日期格式固定，敘述可參考改寫）】：
           ${trackingTemplate}
         ` : '';
@@ -2035,7 +2047,7 @@
           try { if (rid.manualInputs) manObj = JSON.parse(rid.manualInputs); } catch(e) {}
           const trackingTemplate = buildFollowUpTrackingTemplate(currentEventMode, selObj, manObj, rawText);
           if (trackingTemplate) {
-            trackingClause = `\n【followUp 追蹤節點規定（務必與第一次產生一致，嚴格依格式）】先依改善措施寫條列追蹤（未來式），再另起一段（用 \\n\\n 分隔），逐一輸出下方範本的每一個追蹤節點；每個節點自成一段，格式固定為「<節點名稱>（ 　/　/　）：<該節點追蹤敘述>」。\n⚠️【節點名稱固定】<節點名稱>（出院追蹤／看門診回診追蹤／門診追蹤／就醫回診追蹤／結案追蹤）必須逐字保留於每段最前面，一字不可改、不可省略、不可只寫日期而漏名稱。\n⚠️【日期格式固定】一律用「全形括號 + 台灣年在前」格式「（ 　/　/　）」、日期留白不可自行填入。\n只有 <該節點追蹤敘述> 可依個案參考範本改寫（不必逐字照抄）；未知的未來資訊以留白（______）或「待追蹤」帶過、不要編造。\n⚠️【節點不可刪減】範本有幾個節點就輸出幾段，不可刪除或合併；「結案追蹤」必為最後一段不可省略。\n【追蹤節點範本（節點名稱與日期格式固定，敘述可參考改寫）】：\n${trackingTemplate}`;
+            trackingClause = `\n【followUp 追蹤節點規定（務必與第一次產生一致，嚴格依格式）】先依改善措施寫條列追蹤（未來式），再另起一段（用 \\n\\n 分隔），逐一輸出下方範本的每一個追蹤節點；每個節點自成一段，格式固定為「<節點名稱>（ 　/　/　）：<該節點追蹤敘述>」。\n⚠️【節點名稱固定】<節點名稱>（出院追蹤／看門診回診追蹤／門診追蹤／就醫回診追蹤／結案追蹤）必須逐字保留於每段最前面，一字不可改、不可省略、不可只寫日期而漏名稱。\n⚠️【日期格式固定】一律用「全形括號 + 台灣年在前」格式「（ 　/　/　）」、日期留白不可自行填入。\n只有 <該節點追蹤敘述> 可依個案參考範本改寫（不必逐字照抄）；未知的未來資訊以留白（______）或「待追蹤」帶過、不要編造。\n⚠️【節點不可刪減】範本有幾個節點就輸出幾段，不可刪除或合併；「結案追蹤」必為最後一段不可省略。\n⚠️【不可自行新增節點】範本已依實際紀錄篩選；若範本未含出院／門診／回診／就醫節點，代表本案查無住院或就醫資訊，整個追蹤情形（含條列追蹤）都不得出現出院、門診、回診、就醫等內容，只依範本輸出。\n【追蹤節點範本（節點名稱與日期格式固定，敘述可參考改寫）】：\n${trackingTemplate}`;
           }
         }
 
