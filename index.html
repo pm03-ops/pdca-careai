@@ -695,6 +695,28 @@
     const GEMINI_PROXY_URL = "https://utsclnrplcophshpvbdi.supabase.co/functions/v1/gemini-proxy"; // AI 代理
     const DATA_API_URL     = "https://utsclnrplcophshpvbdi.supabase.co/functions/v1/data-api";     // 資料後端（取代 GAS）
 
+    // AI 產出參數：設上限避免「重複迴圈」狂吐到爆；moderate 溫度降低貪婪重複
+    const GEN_TUNING = { temperature: 0.7, topP: 0.9, maxOutputTokens: 4096 };
+
+    // 偵測 AI「重複迴圈」壞輸出：某個 6 字片段重複 10 次以上，或單一欄位異常超長
+    function looksDegenerate(t) {
+      const s = String(t == null ? '' : t);
+      if (s.length > 6000) return true;
+      if (s.length < 120) return false;
+      const n = 6, counts = Object.create(null);
+      let max = 0;
+      for (let i = 0; i + n <= s.length; i++) {
+        const g = s.substr(i, n);
+        const c = (counts[g] = (counts[g] || 0) + 1);
+        if (c > max) max = c;
+      }
+      return max >= 10;
+    }
+    // 檢查一組欄位是否有任何一個壞掉（跳過 imageSummary：那是逐字抄錄可以較長）
+    function resultLooksDegenerate(obj, fields) {
+      return fields.some(f => looksDegenerate(obj && obj[f]));
+    }
+
     // 資料後端統一指向 Supabase data-api（不再使用 Google Apps Script）。
     // 保留函式名稱與 isBadGasUrl 讓其他呼叫端與舊邏輯無需大改。
     function isBadGasUrl(url) { return !url || String(url).trim() === ''; }
@@ -724,7 +746,7 @@
     // 都讀取同一份規則，確保格式、語氣、條列方式永遠一致，不會各改各的。
     // =====================================================================
     const EVENT_FIELD_RULES = {
-      rootCause: '以條列式列出事件的根本原因，每點以「N.」編號開頭（N 從 1 起算），每點之間用換行符號分隔；語氣專業客觀、就事論事。⚠️只能依紀錄中「明確出現」的事實撰寫，嚴禁自行推論、補充，或替事件配上紀錄未寫明的日期；紀錄未提供的因果一律不得出現。⚠️若紀錄含多次住院／多個事件（不同日期），只針對「本次分析的事件」撰寫原因，不得把其他次（例如出院後再次住院）的原因混入；無法確定某原因屬於哪一次時，寧可省略也不張冠李戴。',
+      rootCause: '以條列式列出事件的根本原因，每點以「N.」編號開頭（N 從 1 起算），每點之間用換行符號分隔；語氣專業客觀、就事論事。每點用一句話精簡描述（約 15～60 字），原因分析以 3～6 點為限；⚠️嚴禁反覆堆疊同義詞或把同一句、近似句子重複輸出（例如一直重寫「跌倒/摔倒在地」等），一旦講完即停止。⚠️只能依紀錄中「明確出現」的事實撰寫，嚴禁自行推論、補充，或替事件配上紀錄未寫明的日期；紀錄未提供的因果一律不得出現。⚠️若紀錄含多次住院／多個事件（不同日期），只針對「本次分析的事件」撰寫原因，不得把其他次（例如出院後再次住院）的原因混入；無法確定某原因屬於哪一次時，寧可省略也不張冠李戴。',
       improvement: '針對「原因分析」逐項提出對策，優先結合機構可用資源與設備，制定「具體、可行」的改善措施；改善措施總數以 5～7 點為目標，若原因較少，只能從環境、設備、流程、人員訓練、家屬衛教等「通用照護面向」補充一般性對策，⚠️嚴禁為了湊點數而虛構或推論個案未提及的事實（例如未發生的日期、行為、由口進食等）；每點以「N.」編號開頭；每點結尾務必加上「實際建議的完成或執行時間」，用半形括號包住，例如：(建議於 3 天內完成)、(建議 1 週內)、(建議每班執行)、(建議每月稽核一次)、(建議立即執行) —— 請依措施性質填入具體時間，切勿原樣輸出「建議操作時間」這幾個字；每點之間用換行符號分隔。',
       followUp: '以條列式撰寫「後續要追蹤的計畫」——一律用未來式，描述「之後要追蹤／確認的事項」（例如「追蹤…是否落實」「確認…執行成效」），嚴禁寫成「已完成…」「已會診…」等過去式；與「改善措施」一對一對應；每點開頭必須使用【全形括號＋台灣日期格式（年/月/日，年在前，日期一律留白）】：「（ 　/　/　）」或「（ 　/　/　－持續）」，不可用半形括號、不可自行填入日期；每點之間用換行符號分隔。'
     };
@@ -1959,13 +1981,18 @@
           } catch (err) { console.warn('截圖讀取失敗', f.name, err); }
         }
 
-        const response = await fetchWithRetry(GEMINI_PROXY_URL, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { eventType: { type: "STRING" }, rootCause: { type: "STRING" }, improvement: { type: "STRING" }, followUp: { type: "STRING" }, deIdentifiedText: { type: "STRING" }, imageSummary: { type: "STRING" } } } } })
-        });
-        if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
-        
-        currentEventResult = JSON.parse((await response.json()).candidates[0].content.parts[0].text);
+        const reqBody = JSON.stringify({ contents: [{ parts: parts }], generationConfig: { ...GEN_TUNING, responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { eventType: { type: "STRING" }, rootCause: { type: "STRING" }, improvement: { type: "STRING" }, followUp: { type: "STRING" }, deIdentifiedText: { type: "STRING" }, imageSummary: { type: "STRING" } } } } });
+        // 偵測「重複迴圈」壞輸出；若壞掉自動重試，最多 3 次
+        let parsed = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const response = await fetchWithRetry(GEMINI_PROXY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: reqBody });
+          if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
+          const cand = JSON.parse((await response.json()).candidates[0].content.parts[0].text);
+          if (!resultLooksDegenerate(cand, ['rootCause', 'improvement', 'followUp'])) { parsed = cand; break; }
+          console.warn('偵測到 AI 重複迴圈輸出，自動重試中…(第 ' + attempt + ' 次)');
+        }
+        if (!parsed) { alert('AI 產出異常（偵測到重複迴圈），自動重試後仍失敗，請再按一次「送出 AI 分析」。'); return; }
+        currentEventResult = parsed;
         // 若沒上傳截圖則摘要清空，避免 AI 誤填
         const imgSummary = uploadedFiles.length > 0 ? (currentEventResult.imageSummary || '') : '';
         currentEventResult.rawInputDetails = { rawText: textInput, manualInputs: JSON.stringify(activeManualInputs), selections: JSON.stringify(activeSelections), imageSummary: imgSummary };
@@ -2063,14 +2090,20 @@ ${EVENT_FIELD_RULES[field] || '條列式、語氣專業。'}${trackingClause}
 【輸出格式】：純 JSON，結構為 { ${field}: string }。
         `;
 
-        const response = await fetchWithRetry(GEMINI_PROXY_URL, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { [field]: { type: "STRING" } } } } })
-        });
-        if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
+        const regenBody = JSON.stringify({ contents: [{ parts: [{ text: promptText }] }], generationConfig: { ...GEN_TUNING, responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { [field]: { type: "STRING" } } } } });
+        // 偵測「重複迴圈」壞輸出；壞掉自動重試最多 3 次
+        let newVal = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const response = await fetchWithRetry(GEMINI_PROXY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: regenBody });
+          if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
+          const v = JSON.parse((await response.json()).candidates[0].content.parts[0].text)[field];
+          if (!looksDegenerate(v)) { newVal = v; break; }
+          console.warn('重新生成偵測到重複迴圈，重試中…(第 ' + attempt + ' 次)');
+        }
+        if (newVal == null) { alert('AI 產出異常（偵測到重複迴圈），請再按一次重新生成。'); return; }
 
         pushRegenHistory(field, currentEventResult[field]); // 先存舊版供「復原」
-        currentEventResult[field] = JSON.parse((await response.json()).candidates[0].content.parts[0].text)[field];
+        currentEventResult[field] = newVal;
         document.getElementById(`res-${field.toLowerCase().replace('up','-up').replace('cause','-cause')}`).innerHTML = normalizePdcaText(currentEventResult[field]).split('\n').filter(l=>l.trim()).map(l=>`<p class="text-sm text-slate-600 mb-3">${l.trim()}</p>`).join('');
       } catch (err) { console.error(err); alert('重新生成失敗'); } finally { document.getElementById(`loading-${field}`)?.classList.replace('flex', 'hidden'); }
     };
@@ -2189,7 +2222,7 @@ causeAnalysis 內容以「N.」編號分段（1. 趨勢總結 / 2. 共同根因 
 
         const response = await fetchWithRetry(GEMINI_PROXY_URL, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { causeAnalysis: { type: "STRING" }, inputError: { type: "STRING" } } } } })
+          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { ...GEN_TUNING, responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { causeAnalysis: { type: "STRING" }, inputError: { type: "STRING" } } } } })
         });
         if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
         const caResult = JSON.parse((await response.json()).candidates[0].content.parts[0].text);
@@ -2328,7 +2361,7 @@ ${tpl.act}
 
         const response = await fetchWithRetry(GEMINI_PROXY_URL, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { plan: { type: "STRING" }, do: { type: "STRING" }, check: { type: "STRING" }, act: { type: "STRING" }, inputError: { type: "STRING" } } } } })
+          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { ...GEN_TUNING, responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { plan: { type: "STRING" }, do: { type: "STRING" }, check: { type: "STRING" }, act: { type: "STRING" }, inputError: { type: "STRING" } } } } })
         });
         if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
         const pdcaResult = JSON.parse((await response.json()).candidates[0].content.parts[0].text);
@@ -2471,7 +2504,7 @@ Act: ${currentPdcaResult.act}
 
         const response = await fetchWithRetry(GEMINI_PROXY_URL, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { [field]: { type: "STRING" } } } } })
+          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { ...GEN_TUNING, responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { [field]: { type: "STRING" } } } } })
         });
         if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
 
