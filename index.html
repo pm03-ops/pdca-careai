@@ -1362,9 +1362,14 @@
                     </div>
                     ${(evt.residentName || evt.bedNumber) ? `<div class="flex items-center gap-2 text-xs"><span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><i class="ph ph-user"></i>${evt.residentName || '—'}</span><span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><i class="ph ph-bed"></i>床號 ${evt.bedNumber || '—'}</span></div>` : ''}
                     <p class="text-xs text-slate-500 line-clamp-2 mt-1">${evt.deIdentifiedText || evt.rawInputDetails?.rawText || '無摘要'}</p>
-                    <button onclick="loadEventForEditing('${evt.id}')" class="mt-2 w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-sm transition-colors border border-slate-200">
-                        載入並修改此紀錄
-                    </button>
+                    <div class="mt-2 flex items-center gap-2">
+                        <button onclick="loadEventForEditing('${evt.id}')" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-sm transition-colors border border-slate-200">
+                            載入並修改此紀錄
+                        </button>
+                        <button onclick="deleteEventRecord('${evt.id}')" title="刪除此紀錄（後台仍保留，可還原）" class="shrink-0 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-lg text-sm transition-colors border border-rose-200 flex items-center gap-1">
+                            <i class="ph ph-trash"></i> 刪除
+                        </button>
+                    </div>
                 </div>
             `).join('');
         }
@@ -1388,15 +1393,50 @@
                         </div>
                     </div>
                     <p class="text-xs text-slate-500 line-clamp-2 mt-1">涵蓋 ${pdca.eventsCount} 筆事件</p>
-                    <button onclick="loadPDCAForEditing('${pdca.id}')" class="mt-2 w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-sm transition-colors border border-slate-200">
-                        載入並修改此 PDCA 報告
-                    </button>
+                    <div class="mt-2 flex items-center gap-2">
+                        <button onclick="loadPDCAForEditing('${pdca.id}')" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-sm transition-colors border border-slate-200">
+                            載入並修改此 PDCA 報告
+                        </button>
+                        <button onclick="deletePDCARecord('${pdca.id}')" title="刪除此報告（後台仍保留，可還原）" class="shrink-0 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-lg text-sm transition-colors border border-rose-200 flex items-center gap-1">
+                            <i class="ph ph-trash"></i> 刪除
+                        </button>
+                    </div>
                 </div>
             `).join('');
         }
         document.getElementById('pdca-history-modal').classList.replace('hidden', 'flex');
     };
     window.closePDCAHistoryModal = function() { document.getElementById('pdca-history-modal').classList.replace('flex', 'hidden'); };
+
+    // ================= 歷史紀錄刪除（軟刪除：前台隱藏、後台保留可還原）=================
+    window.deleteEventRecord = async function(id) {
+        const evt = cloudEventsList.find(e => String(e.id) === String(id));
+        const label = evt ? `${evt.eventType}（${evt.residentName || '未填姓名'}）` : '這筆紀錄';
+        if (!confirm(`確定要刪除「${label}」嗎？\n\n刪除後不會顯示在歷史清單，但資料仍完整保留在後台，必要時可還原。`)) return;
+        try {
+            const res = await fetchWithRetry(getGasUrl(), { method: 'POST', body: JSON.stringify({ action: 'deleteEvent', ward: currentLoggedWard, id }), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+            const rd = res ? await res.json() : null;
+            if (rd && rd.status === 'success') {
+                showToast('已刪除（後台仍保留，可還原）');
+                await fetchEventsFromCloud();
+                openHistoryModal(); // 重新渲染清單（Modal 維持開啟）
+            } else { alert('刪除失敗：' + ((rd && rd.message) || '無回應')); }
+        } catch (e) { console.error(e); alert('刪除失敗，請檢查網路後再試。'); }
+    };
+    window.deletePDCARecord = async function(id) {
+        const pdca = cloudPdcaList.find(p => String(p.id) === String(id));
+        const label = pdca ? `${pdca.eventTypeLabel || 'PDCA'} ${pdca.dateRange || ''}` : '這份報告';
+        if (!confirm(`確定要刪除「${label}」這份 PDCA 報告嗎？\n\n刪除後不會顯示在歷史清單，但資料仍完整保留在後台，必要時可還原。`)) return;
+        try {
+            const res = await fetchWithRetry(getGasUrl(), { method: 'POST', body: JSON.stringify({ action: 'deletePDCA', ward: currentLoggedWard, id }), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+            const rd = res ? await res.json() : null;
+            if (rd && rd.status === 'success') {
+                showToast('已刪除（後台仍保留，可還原）');
+                await fetchPDCAFromCloud();
+                openPDCAHistoryModal();
+            } else { alert('刪除失敗：' + ((rd && rd.message) || '無回應')); }
+        } catch (e) { console.error(e); alert('刪除失敗，請檢查網路後再試。'); }
+    };
 
 
     // ================= 表單操作 (單一事件) =================

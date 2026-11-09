@@ -89,15 +89,40 @@ Deno.serve(async (req) => {
       }
 
       case "getEvents": {
+        // 只回傳未刪除的（deleted_at 為空）
         const { data, error } = await supabase
           .from("events").select("data").eq("ward", ward)
+          .is("deleted_at", null)
           .order("created_at", { ascending: true });
         if (error) return json({ status: "error", message: error.message }, 500);
         return json({ status: "success", data: (data ?? []).map((r) => r.data) });
       }
 
+      // 後台查看已刪除（封存）的事件
+      case "getDeletedEvents": {
+        const { data, error } = await supabase
+          .from("events").select("data, deleted_at").eq("ward", ward)
+          .not("deleted_at", "is", null)
+          .order("deleted_at", { ascending: false });
+        if (error) return json({ status: "error", message: error.message }, 500);
+        return json({ status: "success", data: (data ?? []).map((r) => ({ ...r.data, deletedAt: r.deleted_at })) });
+      }
+
+      // 軟刪除：只標記 deleted_at，資料本體仍保留於後台，可還原
       case "deleteEvent": {
-        await supabase.from("events").delete().eq("ward", ward).eq("id", String(b.id));
+        const { error } = await supabase.from("events")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("ward", ward).eq("id", String(b.id));
+        if (error) return json({ status: "error", message: error.message }, 500);
+        return json({ status: "success" });
+      }
+
+      // 還原已刪除的事件
+      case "restoreEvent": {
+        const { error } = await supabase.from("events")
+          .update({ deleted_at: null })
+          .eq("ward", ward).eq("id", String(b.id));
+        if (error) return json({ status: "error", message: error.message }, 500);
         return json({ status: "success" });
       }
 
@@ -128,13 +153,34 @@ Deno.serve(async (req) => {
       case "getPDCA": {
         const { data, error } = await supabase
           .from("pdca").select("data").eq("ward", ward)
+          .is("deleted_at", null)
           .order("created_at", { ascending: true });
         if (error) return json({ status: "error", message: error.message }, 500);
         return json({ status: "success", data: (data ?? []).map((r) => r.data) });
       }
 
+      case "getDeletedPDCA": {
+        const { data, error } = await supabase
+          .from("pdca").select("data, deleted_at").eq("ward", ward)
+          .not("deleted_at", "is", null)
+          .order("deleted_at", { ascending: false });
+        if (error) return json({ status: "error", message: error.message }, 500);
+        return json({ status: "success", data: (data ?? []).map((r) => ({ ...r.data, deletedAt: r.deleted_at })) });
+      }
+
       case "deletePDCA": {
-        await supabase.from("pdca").delete().eq("ward", ward).eq("id", String(b.id));
+        const { error } = await supabase.from("pdca")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("ward", ward).eq("id", String(b.id));
+        if (error) return json({ status: "error", message: error.message }, 500);
+        return json({ status: "success" });
+      }
+
+      case "restorePDCA": {
+        const { error } = await supabase.from("pdca")
+          .update({ deleted_at: null })
+          .eq("ward", ward).eq("id", String(b.id));
+        if (error) return json({ status: "error", message: error.message }, 500);
         return json({ status: "success" });
       }
 
