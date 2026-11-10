@@ -586,11 +586,31 @@
             <div class="flex flex-col gap-1.5"><label class="text-xs font-semibold text-slate-600">可協助人力 / 家屬態度</label><input type="text" id="setting-staffing-family" class="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"></div>
           </div>
         </div>
+        <div class="border-t border-slate-100"></div>
+        <div class="space-y-3">
+          <h4 class="font-bold text-slate-700 flex items-center gap-2 text-sm"><i class="ph ph-trash text-lg text-rose-500"></i> 已刪除紀錄管理</h4>
+          <p class="text-xs text-slate-500 leading-relaxed">查看本機構已刪除、但仍保留在後台的事件與 PDCA 報告，可一鍵還原回歷史清單。</p>
+          <button onclick="openDeletedRecordsModal()" class="w-full mt-1 px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-lg text-sm transition-colors border border-rose-200 flex items-center justify-center gap-2">
+            <i class="ph ph-clock-counter-clockwise"></i> 開啟已刪除紀錄 / 還原
+          </button>
+        </div>
       </div>
       <div class="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
         <button onclick="closeSettingsModal()" class="px-5 py-2 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100">取消</button>
         <button onclick="saveAndCloseSettings()" class="px-5 py-2 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 flex items-center gap-2"><i class="ph ph-floppy-disk"></i> 儲存並套用</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ================= 已刪除紀錄 / 還原 Modal ================= -->
+  <div id="deleted-records-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px] z-[60] hidden items-center justify-center fade-in">
+    <div class="bg-white rounded-2xl shadow-2xl w-[800px] max-w-[95vw] max-h-[85vh] flex flex-col overflow-hidden border border-slate-200">
+      <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/80">
+        <h3 class="font-bold text-slate-800 flex items-center gap-2 text-lg"><i class="ph ph-clock-counter-clockwise text-rose-500"></i> 已刪除紀錄（可還原）</h3>
+        <button onclick="closeDeletedRecordsModal()" class="text-slate-400 hover:text-slate-700 transition-colors bg-white rounded-md p-1 border border-slate-200"><i class="ph ph-x text-lg"></i></button>
+      </div>
+      <div class="px-6 py-3 bg-rose-50/40 border-b border-rose-100 text-xs text-slate-500">以下是<b id="deleted-ward-name"></b>已刪除、但仍完整保留在後台的紀錄。按「還原」即可回到歷史清單。</div>
+      <div id="deleted-records-list" class="flex-1 overflow-y-auto p-6 flex flex-col gap-3"></div>
     </div>
   </div>
 
@@ -1436,6 +1456,92 @@
                 openPDCAHistoryModal();
             } else { alert('刪除失敗：' + ((rd && rd.message) || '無回應')); }
         } catch (e) { console.error(e); alert('刪除失敗，請檢查網路後再試。'); }
+    };
+
+    // ================= 已刪除紀錄 / 還原（後台管理畫面）=================
+    window.openDeletedRecordsModal = async function() {
+        if (!currentLoggedWard) return;
+        const nameEl = document.getElementById('deleted-ward-name');
+        if (nameEl) nameEl.innerText = ' ' + wardDisplay(currentLoggedWard) + ' ';
+        const list = document.getElementById('deleted-records-list');
+        list.innerHTML = '<div class="text-center text-slate-400 py-10"><i class="ph ph-spinner animate-spin text-2xl"></i><p class="mt-2 text-sm">載入中…</p></div>';
+        document.getElementById('deleted-records-modal').classList.replace('hidden', 'flex');
+        try {
+            const get = async (action) => {
+                const res = await fetchWithRetry(getGasUrl(), { method: 'POST', body: JSON.stringify({ action, ward: currentLoggedWard }), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+                const j = res ? await res.json() : null;
+                return (j && j.status === 'success' && Array.isArray(j.data)) ? j.data : [];
+            };
+            const [evs, pds] = await Promise.all([get('getDeletedEvents'), get('getDeletedPDCA')]);
+            renderDeletedRecords(evs, pds);
+        } catch (e) { console.error(e); list.innerHTML = '<div class="text-center text-rose-500 py-10 font-bold">載入失敗，請檢查網路後再試。</div>'; }
+    };
+    window.closeDeletedRecordsModal = function() { document.getElementById('deleted-records-modal').classList.replace('flex', 'hidden'); };
+
+    function fmtDeletedAt(s) { try { return new Date(s).toLocaleString('zh-TW'); } catch (e) { return s || ''; } }
+
+    function renderDeletedRecords(events, pdcas) {
+        const list = document.getElementById('deleted-records-list');
+        if ((!events || !events.length) && (!pdcas || !pdcas.length)) {
+            list.innerHTML = '<div class="text-center text-slate-500 py-10 font-bold">目前沒有已刪除的紀錄 🎉</div>';
+            return;
+        }
+        let html = '';
+        if (events && events.length) {
+            html += '<div class="text-xs font-bold text-slate-500 mb-1">異常事件（' + events.length + '）</div>';
+            html += events.map(evt => `
+                <div class="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-2">
+                    <div class="flex justify-between items-center">
+                        <span class="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-1 rounded">${evt.saveDate || ''}</span>
+                        <span class="text-sm font-bold text-slate-600">${evt.eventType || ''}</span>
+                    </div>
+                    ${(evt.residentName || evt.bedNumber) ? `<div class="flex items-center gap-2 text-xs"><span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><i class="ph ph-user"></i>${evt.residentName || '—'}</span><span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><i class="ph ph-bed"></i>床號 ${evt.bedNumber || '—'}</span></div>` : ''}
+                    <p class="text-xs text-slate-500 line-clamp-2">${evt.deIdentifiedText || (evt.rawInputDetails && evt.rawInputDetails.rawText) || '無摘要'}</p>
+                    <div class="flex items-center justify-between mt-1">
+                        <span class="text-[11px] text-rose-400"><i class="ph ph-trash"></i> 刪除於 ${fmtDeletedAt(evt.deletedAt)}</span>
+                        <button onclick="restoreEventRecord('${evt.id}')" class="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-lg text-sm border border-emerald-200 flex items-center gap-1"><i class="ph ph-arrow-counter-clockwise"></i> 還原</button>
+                    </div>
+                </div>`).join('');
+        }
+        if (pdcas && pdcas.length) {
+            html += '<div class="text-xs font-bold text-slate-500 mt-3 mb-1">PDCA 報告（' + pdcas.length + '）</div>';
+            html += pdcas.map(pdca => `
+                <div class="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-2">
+                    <div class="flex justify-between items-center">
+                        <span class="bg-teal-100 text-teal-700 text-xs font-bold px-2 py-1 rounded">${pdca.timestamp || ''}</span>
+                        <div class="flex items-center gap-2">${pdca.eventTypeLabel ? `<span class="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded">${pdca.eventTypeLabel}</span>` : ''}<span class="text-sm font-bold text-slate-600">區間: ${pdca.dateRange || ''}</span></div>
+                    </div>
+                    <p class="text-xs text-slate-500">涵蓋 ${pdca.eventsCount || 0} 筆事件</p>
+                    <div class="flex items-center justify-between mt-1">
+                        <span class="text-[11px] text-rose-400"><i class="ph ph-trash"></i> 刪除於 ${fmtDeletedAt(pdca.deletedAt)}</span>
+                        <button onclick="restorePDCARecord('${pdca.id}')" class="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-lg text-sm border border-emerald-200 flex items-center gap-1"><i class="ph ph-arrow-counter-clockwise"></i> 還原</button>
+                    </div>
+                </div>`).join('');
+        }
+        list.innerHTML = html;
+    }
+
+    window.restoreEventRecord = async function(id) {
+        try {
+            const res = await fetchWithRetry(getGasUrl(), { method: 'POST', body: JSON.stringify({ action: 'restoreEvent', ward: currentLoggedWard, id }), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+            const rd = res ? await res.json() : null;
+            if (rd && rd.status === 'success') {
+                showToast('已還原，已回到歷史清單');
+                await fetchEventsFromCloud();
+                openDeletedRecordsModal(); // 重新整理已刪除清單
+            } else { alert('還原失敗：' + ((rd && rd.message) || '無回應')); }
+        } catch (e) { console.error(e); alert('還原失敗，請檢查網路後再試。'); }
+    };
+    window.restorePDCARecord = async function(id) {
+        try {
+            const res = await fetchWithRetry(getGasUrl(), { method: 'POST', body: JSON.stringify({ action: 'restorePDCA', ward: currentLoggedWard, id }), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+            const rd = res ? await res.json() : null;
+            if (rd && rd.status === 'success') {
+                showToast('已還原，已回到歷史清單');
+                await fetchPDCAFromCloud();
+                openDeletedRecordsModal();
+            } else { alert('還原失敗：' + ((rd && rd.message) || '無回應')); }
+        } catch (e) { console.error(e); alert('還原失敗，請檢查網路後再試。'); }
     };
 
 
