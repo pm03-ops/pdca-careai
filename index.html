@@ -716,13 +716,33 @@
     const DATA_API_URL     = "https://utsclnrplcophshpvbdi.supabase.co/functions/v1/data-api";     // 資料後端（取代 GAS）
 
     // AI 產出參數：設上限避免「重複迴圈」狂吐到爆；moderate 溫度降低貪婪重複
-    const GEN_TUNING = { temperature: 0.7, topP: 0.9, maxOutputTokens: 4096 };
+    // 注意：目前的 flash/pro 都是「先思考再輸出」的模型，思考用掉的 token 也算在 maxOutputTokens 裡；
+    // 4096 會讓「思考＋長輸出」塞不下而被截斷，所以給 8192。（實測把思考調低反而會失控狂吐，故保留思考）
+    const GEN_TUNING = { temperature: 0.7, topP: 0.9, maxOutputTokens: 8192 };
 
-    // 偵測 AI「重複迴圈」壞輸出：某個 6 字片段重複 10 次以上，或單一欄位異常超長
+    // 偵測 AI 壞輸出：重複迴圈、灌水式崩潰（長串無斷句／字元反覆堆疊）、驚嘆號成串、回音出 prompt 指令
     function looksDegenerate(t) {
       const s = String(t == null ? '' : t);
-      if (s.length > 6000) return true;
+      if (s.length > 6000) return true;              // 單一欄位異常超長
+      // 1) 強訊號（任何長度都檢查）
+      if (/純\s*JSON|responseSchema|responseMimeType|全形括號|半形括號|去識別化|換行(規範|符號|硬性)|不堆疊同義詞|固定標題|一對一對應/.test(s)) return true;
+      if ((s.match(/！/g) || []).length >= 3) return true;
+      if ((s.match(/即止|即刻停止|完畢即止|無庸贅述|兜圈|節外生枝|劃下句點|無多餘|嚴格停止|止步/g) || []).length >= 3) return true;
       if (s.length < 120) return false;
+      // 2) 長行但幾乎沒有標點（run-on）或字元多樣性過低 → 行政用語灌水
+      for (const line of s.split('\n')) {
+        if (line.length > 120) {
+          const puncts = (line.match(/[。，、；：！？]/g) || []).length;
+          if (puncts / line.length < 0.02) return true;
+          // 多樣性只看實際文字，忽略追蹤範本的留白（______、　/　/　、空白、括號）
+          const core = line.replace(/[_\s　\/／（）()]/g, '');
+          if (core.length > 100 && new Set(core).size / core.length < 0.40) return true;
+        }
+      }
+      // 3) 單一段落異常長
+      let longest = 0; for (const line of s.split('\n')) if (line.length > longest) longest = line.length;
+      if (longest > 450) return true;
+      // 4) 6 字片段高度重複 → 重複迴圈
       const n = 6, counts = Object.create(null);
       let max = 0;
       for (let i = 0; i + n <= s.length; i++) {
@@ -735,6 +755,111 @@
     // 檢查一組欄位是否有任何一個壞掉（跳過 imageSummary：那是逐字抄錄可以較長）
     function resultLooksDegenerate(obj, fields) {
       return fields.some(f => looksDegenerate(obj && obj[f]));
+    }
+
+    // 單一事件分析用 pro：實測 flash 在「原因分析」只會描述經過、在「改善措施＋追蹤」常把追蹤留空或截斷，
+    // pro 兩者都穩定且整體反而更快（不必一再重試）。月底 PDCA 等其他功能仍維持 flash。
+    const PRO_MODEL = 'gemini-pro-latest';
+    const PRO_TUNING = { ...GEN_TUNING, maxOutputTokens: 16384 }; // pro 思考量較大，給足空間避免被截斷
+
+    // 呼叫代理取得單一 JSON 物件；model 為 null 時使用代理預設（flash）
+    async function callGeminiJSON(parts, schemaProps, model, tuning, required) {
+      const schema = { type: 'OBJECT', properties: schemaProps };
+      if (required) schema.required = required;
+      const body = { contents: [{ parts }], generationConfig: { ...(tuning || GEN_TUNING), responseMimeType: 'application/json', responseSchema: schema } };
+      if (model) body.__model = model;
+      const res = await fetchWithRetry(GEMINI_PROXY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res || !res.ok) throw new Error('API 請求失敗: ' + (res ? res.status : '無回應'));
+      return JSON.parse((await res.json()).candidates[0].content.parts[0].text);
+    }
+
+    // 原因分析：獨立一支 pro 呼叫，專心做根因分析（不和其他欄位擠在同一個大指令裡，品質與穩定度都較好）。
+    // 「第一次產生」與「重新生成」共用這一支，確保結果一致；pro 連續失敗兩次會自動退回 flash。
+    async function generateRootCause(ctx) {
+      const prompt = `你是一位「資深且務實的長照機構護理督導」。請只針對以下異常事件撰寫「原因分析」。
+【當前分析類型】：${ctx.eventName}
+【機構可用資源】：目前措施：${ctx.measures || '無'} / 現有設備：${ctx.tools || '無'} / 人力家屬：${ctx.staffing || '無'}
+【輸入資料】：手動欄位：${ctx.manual || '{}'} / 結構選項：${ctx.selections || '{}'} / 紀錄：${ctx.rawText || '（無）'}${ctx.imageSummary ? `\n【紙本紀錄截圖摘要】：${ctx.imageSummary}` : ''}
+【原因分析撰寫規則】：${EVENT_FIELD_RULES.rootCause}
+【換行硬性規定】⚠️ 每一個條列點之間都必須有真正的換行符號（\\n）。
+【輸出格式】：純 JSON，結構為 { rootCause: string }。`;
+      const parts = [{ text: prompt }, ...(ctx.imageParts || [])];
+      for (const model of [PRO_MODEL, PRO_MODEL, null]) {
+        try {
+          const out = await callGeminiJSON(parts, { rootCause: { type: 'STRING' } }, model, model ? PRO_TUNING : GEN_TUNING);
+          const rc = String((out && out.rootCause) || '').trim();
+          if (rc && !looksDegenerate(rc)) return rc;
+          console.warn('原因分析輸出異常，自動重試…', model || 'flash');
+        } catch (e) { console.warn('原因分析呼叫失敗，自動重試…', model || 'flash', e); }
+      }
+      return null;
+    }
+
+    // ===== 改善措施／追蹤：改用「結構化輸出」=====
+    // 實測讓 AI 自己排一大段格式化文字時，常在「半形括號／建議時間」格式上反覆自我修正而失控、或把追蹤塞進改善措施留下空白。
+    // 改成每項分欄位（措施／建議時間／對應追蹤／是否持續），由程式組出固定格式：編號、(建議…)、（ 　/　/　）日期、節點名稱都不會錯，
+    // 措施與追蹤天生一對一，數量也被 5～7 項鎖住。
+    const STRUCT_IMPROVEMENT_RULE = `improvements：5～7 項改善措施，必須針對「已定稿的原因分析」逐項提出對策，優先結合機構可用資源與設備；若原因較少，只能從環境、設備、流程、人員訓練、家屬衛教等通用照護面向補充一般性對策，嚴禁虛構個案未提及的事實。每一項包含：
+   ・measure：一句具體可行的措施（不要編號、不要括號、不要寫時間）。
+   ・timing：建議完成或執行時間，例如「建議於 3 天內完成」「建議 1 週內」「建議每班執行」「建議每月稽核一次」「建議立即執行」（依措施性質填入具體時間；不要括號）。`;
+    const STRUCT_FOLLOWUP_RULE = `   ・followUp：對應這一項措施「之後要追蹤／確認的事項」，一律未來式（例如「追蹤…是否落實」「確認…執行成效」），嚴禁寫成「已完成」等過去式；不要寫日期、不要括號。
+   ・ongoing：這項追蹤是否為持續性追蹤（true／false）。`;
+
+    // 追蹤日期留白（直接取自追蹤範本，確保與既有格式完全一致）
+    function dateSlot(ongoing) {
+      const m = String(TRACKING_BLOCKS.generic_close || '').match(/（[^）]*）/);
+      const s = m ? m[0] : '（ 　/　/　）';
+      return ongoing ? s.replace('）', '－持續）') : s;
+    }
+    // 把追蹤節點範本拆成 [{label, desc}]
+    function parseTrackingNodes(template) {
+      if (!template) return [];
+      return String(template).split(/\n{2,}/).map(b => {
+        const m = b.trim().match(/^(.+?)（[^）]*）：([\s\S]*)$/);
+        return m ? { label: m[1].trim(), desc: m[2].trim() } : null;
+      }).filter(Boolean);
+    }
+    function trackingNodesRule(templateNodes) {
+      if (!templateNodes.length) return 'trackingNodes：回傳空陣列 []。';
+      const hasMedical = templateNodes.some(n => /出院|門診|回診|就醫/.test(n.label));
+      return `trackingNodes：依下列節點順序，每個節點一項（共 ${templateNodes.length} 項）；label 必須與節點名稱完全相同，text 為該節點的追蹤敘述，可參考範本依個案改寫，未知的未來資訊（醫院、診斷、檢驗值、回診結果等）用 ______ 留白或寫「待追蹤」，不要編造、不要寫日期。
+${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc}）`).join('\n')}`
+        + (hasMedical ? '' : '\n⚠️ 節點中沒有出院／門診／回診／就醫，代表本案查無住院或就醫資訊：所有 followUp 與節點敘述都不得提及出院、門診、回診、就醫。');
+    }
+    function cleanItemText(s) {
+      return String(s || '').trim().replace(/^\s*\d+[\.、．]\s*/, '').replace(/^（[^）]*）/, '').trim();
+    }
+    function buildImprovementText(items) {
+      return items.map((it, i) => {
+        let tm = String(it.timing || '').trim().replace(/^[（(\s]+|[）)\s]+$/g, '');
+        if (tm && !/^建議/.test(tm)) tm = '建議' + tm;
+        const ms = cleanItemText(it.measure).replace(/[（(]建議[^）)]*[）)]\s*。?$/, '').trim();
+        return `${i + 1}. ${ms}${tm ? `(${tm})` : ''}`;
+      }).join('\n');
+    }
+    function buildFollowUpText(items, nodes, templateNodes) {
+      const bullets = items.map(it => dateSlot(!!it.ongoing) + cleanItemText(it.followUp));
+      const nodeLines = templateNodes.map(tn => {
+        const key = tn.label.replace(/\s/g, '');
+        const hit = (nodes || []).find(n => String((n && n.label) || '').replace(/\s/g, '') === key);
+        let txt = hit ? String(hit.text || '').trim().replace(/^[^，。；（]{2,10}（[^）]*）：/, '') : '';
+        if (!txt || txt.length > 300 || looksDegenerate(txt)) txt = tn.desc;   // 沒寫或寫壞就用範本原文，保證節點齊全
+        return tn.label + dateSlot(false) + '：' + txt;
+      });
+      return bullets.join('\n') + (nodeLines.length ? '\n\n' + nodeLines.join('\n\n') : '');
+    }
+    // 每一項的指定欄位都要有內容、長度合理、且沒有崩潰
+    function itemsOk(items, fields, min) {
+      if (!Array.isArray(items) || items.length < min) return false;
+      return items.every(it => fields.every(f => {
+        const v = String((it && it[f]) || '').trim();
+        return v.length >= 4 && v.length <= 260 && !looksDegenerate(v);
+      }));
+    }
+
+    function setAnalyzeLoadingText(msg) {
+      const el = document.getElementById('analyze-btn-loading');
+      if (el) el.innerHTML = `<i class="ph ph-spinner animate-spin text-2xl shrink-0"></i> <span>${msg}</span>`;
     }
 
     // 資料後端統一指向 Supabase data-api（不再使用 Google Apps Script）。
@@ -766,7 +891,7 @@
     // 都讀取同一份規則，確保格式、語氣、條列方式永遠一致，不會各改各的。
     // =====================================================================
     const EVENT_FIELD_RULES = {
-      rootCause: '以條列式列出事件的根本原因，每點以「N.」編號開頭（N 從 1 起算），每點之間用換行符號分隔；語氣專業客觀、就事論事。每點用一句話精簡描述（約 15～60 字），原因分析以 3～6 點為限；⚠️嚴禁反覆堆疊同義詞或把同一句、近似句子重複輸出（例如一直重寫「跌倒/摔倒在地」等），一旦講完即停止。⚠️只能依紀錄中「明確出現」的事實撰寫，嚴禁自行推論、補充，或替事件配上紀錄未寫明的日期；紀錄未提供的因果一律不得出現。⚠️若紀錄含多次住院／多個事件（不同日期），只針對「本次分析的事件」撰寫原因，不得把其他次（例如出院後再次住院）的原因混入；無法確定某原因屬於哪一次時，寧可省略也不張冠李戴。',
+      rootCause: '以條列式列出事件的根本原因，每點以「N.」編號開頭（N 從 1 起算），每點之間用換行符號分隔；語氣專業客觀。請逐點做出「根因分析」——不只是複述事件經過，更要分析為什麼會發生；若為住院、就醫類事件，也要分析為什麼會惡化到需要住院或就醫。可從住民疾病與身心功能、早期徵兆辨識與升級處置時機、照護流程與執行落實、感染控制、環境設備、家屬因素等面向切入，每點把一個根因連同因果推論說清楚、有深度。⚠️不要只是把時間序列重講一遍。⚠️可依紀錄事實做因果推論，但不得虛構紀錄沒有的事件、數據或日期；紀錄沒有明寫的部分請用「可能」「需確認」等措辭，不要寫成既定事實。⚠️若紀錄含多次住院／多個事件（不同日期），只分析「本次事件」，不得把其他次（例如出院後再次住院）的原因混入，無法確定歸屬時寧可省略。⚠️嚴禁重複或近似句子、把輸入資料或本指令文字抄進答案；講完即停止。',
       improvement: '針對「原因分析」逐項提出對策，優先結合機構可用資源與設備，制定「具體、可行」的改善措施；改善措施總數以 5～7 點為目標，若原因較少，只能從環境、設備、流程、人員訓練、家屬衛教等「通用照護面向」補充一般性對策，⚠️嚴禁為了湊點數而虛構或推論個案未提及的事實（例如未發生的日期、行為、由口進食等）；每點以「N.」編號開頭；每點結尾務必加上「實際建議的完成或執行時間」，用半形括號包住，例如：(建議於 3 天內完成)、(建議 1 週內)、(建議每班執行)、(建議每月稽核一次)、(建議立即執行) —— 請依措施性質填入具體時間，切勿原樣輸出「建議操作時間」這幾個字；每點之間用換行符號分隔。',
       followUp: '以條列式撰寫「後續要追蹤的計畫」——一律用未來式，描述「之後要追蹤／確認的事項」（例如「追蹤…是否落實」「確認…執行成效」），嚴禁寫成「已完成…」「已會診…」等過去式；與「改善措施」一對一對應；每點開頭必須使用【全形括號＋台灣日期格式（年/月/日，年在前，日期一律留白）】：「（ 　/　/　）」或「（ 　/　/　－持續）」，不可用半形括號、不可自行填入日期；每點之間用換行符號分隔。'
     };
@@ -1817,7 +1942,7 @@
     function updateAnalyzeBtnText() {
       const modeName = EVENT_MODES.find(m => m.id === currentEventMode)?.name;
       document.getElementById('analyze-btn-text').innerHTML = `<i class="ph ph-brain text-2xl"></i> 🚀 送出 AI 智能分析 (${modeName})`;
-      document.getElementById('analyze-btn-loading').innerHTML = `<i class="ph ph-spinner animate-spin text-2xl shrink-0"></i> <span>AI 正在以【${currentApiVersion}】分析...</span>`;
+      document.getElementById('analyze-btn-loading').innerHTML = `<i class="ph ph-spinner animate-spin text-2xl shrink-0"></i> <span>AI 正在分析...</span>`;
     }
 
     function initInputs(mode) {
@@ -2089,56 +2214,77 @@
 
       try {
         const trackingTemplate = buildFollowUpTrackingTemplate(currentEventMode, activeSelections, manualInputsData, textInput);
-        const trackingClause = trackingTemplate ? `
-          【followUp 追蹤節點規定 — 請嚴格依格式】
-          - 先依改善措施對應寫條列追蹤（沿用上方 followUp 規則的未來式語氣）。
-          - 接著另起一段（用 \\n\\n 與條列段分隔），逐一輸出【下方範本】的每一個追蹤節點；每個節點自成一段，格式**固定**為：
-            「<節點名稱>（ 　/　/　）：<該節點追蹤敘述>」
-          - ⚠️【節點名稱為固定標題】<節點名稱>（出院追蹤、看門診回診追蹤、門診追蹤、就醫回診追蹤、結案追蹤）必須逐字保留、放在每段最前面，一字不可改、不可省略、不可只寫日期而漏掉名稱。
-          - ⚠️【日期格式固定】一律用「全形括號 + 台灣年在前」格式「（ 　/　/　）」，日期留白、不可自行填入。
-          - 只有 <該節點追蹤敘述> 是「可依個案參考範本改寫」的部分：可依實際個案自然調整用字、不必逐字照抄；未知的未來資訊（就診醫院、診斷、回診結果、檢驗值等）留白（______）或寫「待追蹤」，不要編造。
-          - ⚠️【節點不可刪減】範本有幾個節點就要輸出幾段，不可刪除或合併；「結案追蹤」必為最後一段，絕對不可省略。
-          - ⚠️【不可自行新增節點】範本已依實際紀錄篩選過。若範本未包含「出院追蹤／門診追蹤／回診／就醫」等節點，代表本案護理紀錄與勾選中查無住院或就醫資訊 —— 整個追蹤情形（含最前面的條列追蹤）都不得出現出院、門診、回診、就醫等內容或情境，只能依範本輸出。
-          【下方追蹤節點範本（節點名稱與日期格式固定，敘述可參考改寫）】：
-          ${trackingTemplate}
-        ` : '';
+        const templateNodes = parseTrackingNodes(trackingTemplate);
 
-        let promptText = `
-          你是一位「資深且務實的長照機構護理督導」。請根據使用者紀錄撰寫分析報告。
+        // 截圖（原因分析與其他欄位共用）
+        const imageParts = [];
+        for (const f of uploadedFiles) {
+          try {
+            const b64 = await fileToBase64(f);
+            imageParts.push({ inlineData: { data: b64, mimeType: f.type } });
+          } catch (err) { console.warn('截圖讀取失敗', f.name, err); }
+        }
+
+        // 步驟一：原因分析 —— 獨立 pro 呼叫做深度根因分析
+        setAnalyzeLoadingText('AI 正在深度分析原因（約 20～30 秒）…');
+        const rootCause = await generateRootCause({
+          eventName, measures: currentMeasures, tools: availableTools, staffing: staffingFamily,
+          manual: JSON.stringify(activeManualInputs), selections: JSON.stringify(activeSelections),
+          rawText: textInput, imageParts
+        });
+        if (!rootCause) { alert('原因分析產生失敗，請再按一次「送出 AI 分析」。'); return; }
+
+        // 步驟二：改善措施／追蹤／摘要 —— 結構化輸出（每項分欄位），格式由程式組出
+        setAnalyzeLoadingText('AI 正在撰寫改善措施與追蹤…');
+        const promptText = `
+          你是一位「資深且務實的長照機構護理督導」。請根據使用者紀錄與已定稿的原因分析，提出改善措施與追蹤計畫。
           【當前分析類型】：${eventName}
           【機構可用資源】：目前措施：${currentMeasures || '無'} / 現有設備：${availableTools || '無'} / 人力家屬：${staffingFamily || '無'}
           【輸入資料】：手動欄位：${JSON.stringify(activeManualInputs)} / 結構選項：${JSON.stringify(activeSelections)} / 紀錄：${textInput}
           ${FACTUAL_GROUNDING_RULES}
-          【輸出要求】：純 JSON，包含 eventType, rootCause, improvement, followUp, deIdentifiedText, imageSummary。
-          - rootCause: ${EVENT_FIELD_RULES.rootCause}
-          - improvement: ${EVENT_FIELD_RULES.improvement}
-          - followUp: ${EVENT_FIELD_RULES.followUp}
-          - deIdentifiedText: 摘要去識別化，不可腦補。
-          - imageSummary: 若使用者有上傳截圖（可能多張），請以「客觀、完整」的方式把所有截圖中辨識到的資訊文字化保存 —— 包含表格數值、欄位名稱、勾選項目、日期時間、生命徵象、用藥、簽名欄位、手寫備註等，作為該批紙本紀錄的文字化存檔；多張截圖請依序彙整（可用「截圖1：」「截圖2：」分段）；若沒有上傳任何截圖，則回傳空字串 ""。不要在此欄位做分析或建議，只忠實記錄截圖內容。
-          【換行硬性規定】⚠️ 上述每個欄位的字串值中，每一個條列點之間都必須有「真正的換行符號（\\n）」。嚴禁把多個條列點連寫在同一行，否則畫面會無法正確分行。
-          ${trackingClause}
+          【已定稿的原因分析（改善措施必須據此逐項提出對策）】：
+          ${rootCause}
+          【請填寫的欄位】（格式由系統排版，你只需要填內容，不要自己加編號、括號或日期）：
+          - eventType：事件類型（簡短）。
+          - ${STRUCT_IMPROVEMENT_RULE}
+          ${STRUCT_FOLLOWUP_RULE}
+          - ${trackingNodesRule(templateNodes)}
+          - deIdentifiedText：事件摘要（去識別化，不可腦補）。
+          - imageSummary：若使用者有上傳截圖（可能多張），請以「客觀、完整」的方式把所有截圖中辨識到的資訊文字化保存 —— 包含表格數值、欄位名稱、勾選項目、日期時間、生命徵象、用藥、簽名欄位、手寫備註等；多張截圖請依序彙整（可用「截圖1：」「截圖2：」分段）；若沒有上傳任何截圖，則回傳空字串 ""。只忠實記錄，不做分析。
+          每個欄位寫完即停止，不要重複。
         `;
 
-        let parts = [{ text: promptText }];
-        for (const f of uploadedFiles) {
-          try {
-            const b64 = await fileToBase64(f);
-            parts.push({ inlineData: { data: b64, mimeType: f.type } });
-          } catch (err) { console.warn('截圖讀取失敗', f.name, err); }
-        }
-
-        const reqBody = JSON.stringify({ contents: [{ parts: parts }], generationConfig: { ...GEN_TUNING, responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { eventType: { type: "STRING" }, rootCause: { type: "STRING" }, improvement: { type: "STRING" }, followUp: { type: "STRING" }, deIdentifiedText: { type: "STRING" }, imageSummary: { type: "STRING" } } } } });
-        // 偵測「重複迴圈」壞輸出；若壞掉自動重試，最多 3 次
+        const parts = [{ text: promptText }, ...imageParts];
+        const restSchema = {
+          eventType: { type: 'STRING' },
+          improvements: { type: 'ARRAY', minItems: 5, maxItems: 7, items: { type: 'OBJECT',
+            properties: { measure: { type: 'STRING' }, timing: { type: 'STRING' }, followUp: { type: 'STRING' }, ongoing: { type: 'BOOLEAN' } },
+            required: ['measure', 'timing', 'followUp', 'ongoing'] } },
+          trackingNodes: { type: 'ARRAY', items: { type: 'OBJECT', properties: { label: { type: 'STRING' }, text: { type: 'STRING' } }, required: ['label', 'text'] } },
+          deIdentifiedText: { type: 'STRING' },
+          imageSummary: { type: 'STRING' }
+        };
+        // flash 為主（結構化後實測可穩定產出），異常時改用 pro 備援，最後再試一次 flash
         let parsed = null;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          const response = await fetchWithRetry(GEMINI_PROXY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: reqBody });
-          if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
-          const cand = JSON.parse((await response.json()).candidates[0].content.parts[0].text);
-          if (!resultLooksDegenerate(cand, ['rootCause', 'improvement', 'followUp'])) { parsed = cand; break; }
-          console.warn('偵測到 AI 重複迴圈輸出，自動重試中…(第 ' + attempt + ' 次)');
+        for (const model of [null, PRO_MODEL, null]) {
+          let cand = null;
+          try { cand = await callGeminiJSON(parts, restSchema, model, model ? PRO_TUNING : GEN_TUNING, ['eventType', 'improvements', 'trackingNodes', 'deIdentifiedText', 'imageSummary']); }
+          catch (e) { console.warn('改善措施／追蹤產生失敗，自動重試…', model || 'flash', e); continue; }
+          const items = Array.isArray(cand.improvements) ? cand.improvements.slice(0, 7) : [];
+          if (itemsOk(items, ['measure', 'followUp'], 5) && !looksDegenerate(cand.deIdentifiedText)) {
+            parsed = {
+              eventType: cand.eventType || '',
+              improvement: buildImprovementText(items),
+              followUp: buildFollowUpText(items, cand.trackingNodes, templateNodes),
+              deIdentifiedText: cand.deIdentifiedText || '',
+              imageSummary: cand.imageSummary || ''
+            };
+            break;
+          }
+          console.warn('改善措施／追蹤輸出異常，自動重試…', model || 'flash', { 項數: items.length, 內容: items });
         }
-        if (!parsed) { alert('AI 產出異常（偵測到重複迴圈），自動重試後仍失敗，請再按一次「送出 AI 分析」。'); return; }
-        currentEventResult = parsed;
+        if (!parsed) { alert('AI 產出異常，自動重試後仍失敗，請再按一次「送出 AI 分析」。'); return; }
+        currentEventResult = { ...parsed, rootCause };
         // 若沒上傳截圖則摘要清空，避免 AI 誤填
         const imgSummary = uploadedFiles.length > 0 ? (currentEventResult.imageSummary || '') : '';
         currentEventResult.rawInputDetails = { rawText: textInput, manualInputs: JSON.stringify(activeManualInputs), selections: JSON.stringify(activeSelections), imageSummary: imgSummary };
@@ -2201,52 +2347,71 @@
         const rid = currentEventResult.rawInputDetails || {};
         const rawText = rid.rawText || document.getElementById('record-text').value.trim();
 
-        // 欄位輸出規則 — 直接讀取與 handleAnalyze 共用的 EVENT_FIELD_RULES，
-        // 確保「第一次產生」與「重新生成」的格式/語氣/條列方式 100% 一致
-
-        // 上游已定稿內容（含使用者手動修改），重新生成時必須對齊聯動
-        let upstreamBlock = '';
-        if (field === 'improvement') {
-          upstreamBlock = `【已定稿的原因分析（必須據此撰寫改善措施，逐項對應）】：\n${currentEventResult.rootCause || ''}\n`;
-        } else if (field === 'followUp') {
-          upstreamBlock = `【已定稿的原因分析】：\n${currentEventResult.rootCause || ''}\n\n【已定稿的改善措施（追蹤情形必須與其一對一對應）】：\n${currentEventResult.improvement || ''}\n`;
+        // 原因分析：與第一次產生共用同一支 pro 深度分析（確保一致）
+        if (field === 'rootCause') {
+          const rc = await generateRootCause({
+            eventName, measures: currentMeasures, tools: availableTools, staffing: staffingFamily,
+            manual: rid.manualInputs || '{}', selections: rid.selections || '{}', rawText,
+            imageSummary: rid.imageSummary || currentEventResult.imageSummary || ''
+          });
+          if (!rc) { alert('原因分析重新生成失敗，請再試一次。'); return; }
+          pushRegenHistory('rootCause', currentEventResult.rootCause); // 先存舊版供「復原」
+          currentEventResult.rootCause = rc;
+          document.getElementById('res-root-cause').innerHTML = normalizePdcaText(rc).split('\n').filter(l=>l.trim()).map(l=>`<p class="text-sm text-slate-600 mb-3">${l.trim()}</p>`).join('');
+          return;
         }
 
-        // followUp 的固定追蹤模板（與初次產生規則相同）
-        let trackingClause = '';
-        if (field === 'followUp') {
-          let selObj = selectionsData, manObj = manualInputsData;
-          try { if (rid.selections) selObj = JSON.parse(rid.selections); } catch(e) {}
-          try { if (rid.manualInputs) manObj = JSON.parse(rid.manualInputs); } catch(e) {}
-          const trackingTemplate = buildFollowUpTrackingTemplate(currentEventMode, selObj, manObj, rawText);
-          if (trackingTemplate) {
-            trackingClause = `\n【followUp 追蹤節點規定（務必與第一次產生一致，嚴格依格式）】先依改善措施寫條列追蹤（未來式），再另起一段（用 \\n\\n 分隔），逐一輸出下方範本的每一個追蹤節點；每個節點自成一段，格式固定為「<節點名稱>（ 　/　/　）：<該節點追蹤敘述>」。\n⚠️【節點名稱固定】<節點名稱>（出院追蹤／看門診回診追蹤／門診追蹤／就醫回診追蹤／結案追蹤）必須逐字保留於每段最前面，一字不可改、不可省略、不可只寫日期而漏名稱。\n⚠️【日期格式固定】一律用「全形括號 + 台灣年在前」格式「（ 　/　/　）」、日期留白不可自行填入。\n只有 <該節點追蹤敘述> 可依個案參考範本改寫（不必逐字照抄）；未知的未來資訊以留白（______）或「待追蹤」帶過、不要編造。\n⚠️【節點不可刪減】範本有幾個節點就輸出幾段，不可刪除或合併；「結案追蹤」必為最後一段不可省略。\n⚠️【不可自行新增節點】範本已依實際紀錄篩選；若範本未含出院／門診／回診／就醫節點，代表本案查無住院或就醫資訊，整個追蹤情形（含條列追蹤）都不得出現出院、門診、回診、就醫等內容，只依範本輸出。\n【追蹤節點範本（節點名稱與日期格式固定，敘述可參考改寫）】：\n${trackingTemplate}`;
-          }
+        let selObj = selectionsData, manObj = manualInputsData;
+        try { if (rid.selections) selObj = JSON.parse(rid.selections); } catch(e) {}
+        try { if (rid.manualInputs) manObj = JSON.parse(rid.manualInputs); } catch(e) {}
+        const templateNodes = parseTrackingNodes(buildFollowUpTrackingTemplate(currentEventMode, selObj, manObj, rawText));
+        // 已定稿的改善措施（含使用者手動修改）；追蹤情形重新生成時必須與它一對一
+        const impLines = normalizePdcaText(currentEventResult.improvement || '').split('\n').map(l => l.trim()).filter(Boolean);
+        const impCount = Math.min(Math.max(impLines.length, 1), 10);
+
+        // 與第一次產生相同的「結構化輸出」：每項分欄位，格式由程式組出
+        let schema, required, instr, upstreamBlock;
+        if (field === 'improvement') {
+          upstreamBlock = `【已定稿的原因分析（必須據此撰寫改善措施，逐項對應）】：\n${currentEventResult.rootCause || ''}`;
+          instr = `- ${STRUCT_IMPROVEMENT_RULE.split('\n').slice(0, 3).join('\n')}`;
+          schema = { improvements: { type: 'ARRAY', minItems: 5, maxItems: 7, items: { type: 'OBJECT',
+            properties: { measure: { type: 'STRING' }, timing: { type: 'STRING' } }, required: ['measure', 'timing'] } } };
+          required = ['improvements'];
+        } else {
+          upstreamBlock = `【已定稿的原因分析】：\n${currentEventResult.rootCause || ''}\n\n【已定稿的改善措施（共 ${impCount} 項，追蹤必須依序一對一對應）】：\n${impLines.join('\n')}`;
+          instr = `- improvements：依序對應上面 ${impCount} 項改善措施，每項一筆（共 ${impCount} 筆），每筆包含：\n${STRUCT_FOLLOWUP_RULE}\n- ${trackingNodesRule(templateNodes)}`;
+          schema = {
+            improvements: { type: 'ARRAY', minItems: impCount, maxItems: impCount, items: { type: 'OBJECT',
+              properties: { followUp: { type: 'STRING' }, ongoing: { type: 'BOOLEAN' } }, required: ['followUp', 'ongoing'] } },
+            trackingNodes: { type: 'ARRAY', items: { type: 'OBJECT', properties: { label: { type: 'STRING' }, text: { type: 'STRING' } }, required: ['label', 'text'] } }
+          };
+          required = ['improvements', 'trackingNodes'];
         }
 
         const promptText = `
-你是一位「資深且務實的長照機構護理督導」。請僅重新生成異常事件分析報告中的「${fieldLabel}」欄位，其餘欄位維持不變。
+你是一位「資深且務實的長照機構護理督導」。請僅重新生成異常事件分析報告中的「${fieldLabel}」，其餘維持不變。
 【當前分析類型】：${eventName}
 【機構可用資源】：目前措施：${currentMeasures || '無'} / 現有設備：${availableTools || '無'} / 人力家屬：${staffingFamily || '無'}
 【輸入資料】：手動欄位：${rid.manualInputs || '{}'} / 結構選項：${rid.selections || '{}'} / 紀錄：${rawText || '（無）'}
 ${FACTUAL_GROUNDING_RULES}
-${upstreamBlock}【「${fieldLabel}」欄位輸出規則（與初次產生時完全相同，務必遵守語氣、格式、條列方式與用詞範例，不可偏離版型）】：
-${EVENT_FIELD_RULES[field] || '條列式、語氣專業。'}${trackingClause}
-【換行硬性規定】⚠️ 輸出的字串值中，每一個條列點之間都必須有「真正的換行符號（\\n）」。嚴禁把多個條列點連寫在同一行。
-【輸出格式】：純 JSON，結構為 { ${field}: string }。
+${upstreamBlock}
+【請填寫的欄位】（格式由系統排版，你只需要填內容，不要自己加編號、括號或日期）：
+${instr}
+每個欄位寫完即停止，不要重複。
         `;
 
-        const regenBody = JSON.stringify({ contents: [{ parts: [{ text: promptText }] }], generationConfig: { ...GEN_TUNING, responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { [field]: { type: "STRING" } } } } });
-        // 偵測「重複迴圈」壞輸出；壞掉自動重試最多 3 次
+        // 與第一次產生相同：flash 為主，異常改用 pro 備援，最後再試一次 flash
         let newVal = null;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          const response = await fetchWithRetry(GEMINI_PROXY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: regenBody });
-          if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
-          const v = JSON.parse((await response.json()).candidates[0].content.parts[0].text)[field];
-          if (!looksDegenerate(v)) { newVal = v; break; }
-          console.warn('重新生成偵測到重複迴圈，重試中…(第 ' + attempt + ' 次)');
+        for (const model of [null, PRO_MODEL, null]) {
+          let cand = null;
+          try { cand = await callGeminiJSON([{ text: promptText }], schema, model, model ? PRO_TUNING : GEN_TUNING, required); }
+          catch (e) { console.warn('重新生成失敗，重試中…', model || 'flash', e); continue; }
+          const items = Array.isArray(cand.improvements) ? cand.improvements.slice(0, field === 'improvement' ? 7 : impCount) : [];
+          if (field === 'improvement' && itemsOk(items, ['measure'], 5)) { newVal = buildImprovementText(items); break; }
+          if (field === 'followUp' && itemsOk(items, ['followUp'], impCount)) { newVal = buildFollowUpText(items, cand.trackingNodes, templateNodes); break; }
+          console.warn('重新生成輸出異常，重試中…', model || 'flash', { 項數: items.length, 內容: items });
         }
-        if (newVal == null) { alert('AI 產出異常（偵測到重複迴圈），請再按一次重新生成。'); return; }
+        if (newVal == null) { alert('AI 產出異常，請再按一次重新生成。'); return; }
 
         pushRegenHistory(field, currentEventResult[field]); // 先存舊版供「復原」
         currentEventResult[field] = newVal;

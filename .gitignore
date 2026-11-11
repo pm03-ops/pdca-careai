@@ -16,3 +16,6 @@ Thumbs.db
 # 暫存
 *.log
 *.tmp
+
+# Supabase CLI 暫存（含專案連結資訊，不進 repo）
+supabase/.temp/

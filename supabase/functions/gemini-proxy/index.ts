@@ -12,7 +12,10 @@ const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") ?? Deno.env.get("gemini") 
 
 // 注意：本專案的金鑰對「有版本號的型號名」（gemini-2.5-flash / gemini-2.0-flash 等）會回 404
 // "no longer available"，但 -latest 別名可正常呼叫，且會自動指向當前的 flash 型號。
-const MODEL = "gemini-flash-latest";
+const DEFAULT_MODEL = "gemini-flash-latest";
+// 允許前端以 body.__model 指定的型號白名單（避免被任意注入型號）。
+// 原因分析那類需要深度的欄位會指定 gemini-pro-latest，其餘維持 flash。
+const ALLOWED_MODELS = new Set(["gemini-flash-latest", "gemini-pro-latest"]);
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -42,8 +45,15 @@ Deno.serve(async (req) => {
     // 前端傳來的完整 Gemini 請求 body（contents / generationConfig）
     const body = await req.json();
 
+    // 選擇型號：body.__model 若在白名單內則採用，否則用預設 flash；用完即移除，不轉給 Gemini
+    let model = DEFAULT_MODEL;
+    if (body && typeof body.__model === "string" && ALLOWED_MODELS.has(body.__model)) {
+      model = body.__model;
+    }
+    if (body && "__model" in body) delete body.__model;
+
     const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
