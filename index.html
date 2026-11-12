@@ -452,7 +452,8 @@
           <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-amber-50/30 group relative">
             <div class="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
               <div class="flex items-center gap-2"><i class="ph ph-clock text-amber-500"></i><h4 class="text-sm font-bold text-slate-700">追蹤情形</h4><span class="text-[10px] text-slate-400 font-normal flex items-center gap-0.5"><i class="ph ph-pencil-simple"></i>可編輯</span></div>
-              <div class="flex gap-2">
+              <div class="flex gap-2 items-center">
+                <button id="prefill-toggle" onclick="togglePrefillMode()" class="hidden text-[11px] px-2 py-0.5 rounded-full border border-amber-300 text-amber-700 bg-white hover:bg-amber-50 transition-colors flex items-center gap-1" title="切換是否顯示 AI 依個案預填、但尚未發生的內容（只影響你自己的畫面、複製與匯出）"></button>
                 <button id="undo-btn-followUp" onclick="handleUndo('followUp')" class="hidden text-amber-500 hover:text-amber-700 transition-colors" title="復原上一個版本"><i class="ph ph-arrow-counter-clockwise text-lg"></i></button>
                 <button onclick="handleRegenerateField('followUp')" class="text-slate-400 hover:text-blue-600 transition-colors" title="重新生成此欄位"><i class="ph ph-arrows-clockwise text-lg"></i></button>
                 <button onclick="handleCopyField('res-follow-up')" class="text-slate-400 hover:text-blue-600 transition-colors" title="複製"><i class="ph ph-copy text-lg"></i></button>
@@ -460,6 +461,7 @@
             </div>
             <div class="p-4 text-sm text-slate-600 leading-relaxed editable-field" id="res-follow-up" contenteditable="true" onblur="syncEditableField('event','followUp',this)" title="可直接點擊文字修改；修改後重新生成下游欄位會沿用你的修改"></div>
             <div id="loading-followUp" class="absolute inset-0 bg-amber-50/80 hidden items-center justify-center backdrop-blur-[1px]"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>
+            <p id="prefill-legend" class="hidden px-4 pb-3 -mt-1 text-[11px] text-amber-700">〔 〕內為 AI 依個案預填、尚未發生的內容，請確認後再使用；複製與匯出時會去掉〔 〕。</p>
           </div>
         </div>
 
@@ -822,7 +824,10 @@
     function trackingNodesRule(templateNodes) {
       if (!templateNodes.length) return 'trackingNodes：回傳空陣列 []。';
       const hasMedical = templateNodes.some(n => /出院|門診|回診|就醫/.test(n.label));
-      return `trackingNodes：依下列節點順序，每個節點一項（共 ${templateNodes.length} 項）；label 必須與節點名稱完全相同，text 為該節點的追蹤敘述，可參考範本依個案改寫，未知的未來資訊（醫院、診斷、檢驗值、回診結果等）用 ______ 留白或寫「待追蹤」，不要編造、不要寫日期。
+      return `trackingNodes：依下列節點順序，每個節點一項（共 ${templateNodes.length} 項）；label 必須與節點名稱完全相同，text 為該節點的追蹤敘述，可參考範本依個案改寫，不要寫日期。
+   ⚠️【已發生 vs 尚未發生】紀錄中「已經發生、已記載」的事實（例如已送往的醫院、已確診的診斷、已做的檢查與處置）可以直接寫。
+   「尚未發生」或紀錄沒有記載的內容（例如出院診斷、回診科別與醫師評估、檢驗結果、傷口癒合情形、翻身頻率等數值、結案時的狀況），可以依個案合理預填，但每一段預填內容都必須用〔 〕整段包起來，例如「出院診斷為〔吸入性肺炎〕」「傷處〔已癒合、無感染〕」「每〔2〕小時」；沒有把握就保留範本的 ______。〔 〕外面不可出現任何尚未發生的結果；已發生的事實不要放進〔 〕。
+   ⚠️ 量測值與檢驗數值（體溫、脈搏、呼吸、血壓、血氧、血糖、檢驗值）與日期一律保留範本的 __ 或 ______，不可預填任何數字。
 ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc}）`).join('\n')}`
         + (hasMedical ? '' : '\n⚠️ 節點中沒有出院／門診／回診／就醫，代表本案查無住院或就醫資訊：所有 followUp 與節點敘述都不得提及出院、門診、回診、就醫。');
     }
@@ -842,12 +847,56 @@ ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc
       const nodeLines = templateNodes.map(tn => {
         const key = tn.label.replace(/\s/g, '');
         const hit = (nodes || []).find(n => String((n && n.label) || '').replace(/\s/g, '') === key);
-        let txt = hit ? String(hit.text || '').trim().replace(/^[^，。；（]{2,10}（[^）]*）：/, '') : '';
-        if (!txt || txt.length > 300 || looksDegenerate(txt)) txt = tn.desc;   // 沒寫或寫壞就用範本原文，保證節點齊全
+        let txt = hit ? String(hit.text || '').trim().replace(/^[^，。；（]{2,10}（[^）]*）：/, '')
+          .replace(/〔([\s　\/／_]*)〕/g, '$1') : '';   // 〔　/　/　〕〔______〕這類空白欄不算預填，拆掉〔 〕
+        const unbalanced = (txt.match(/〔/g) || []).length !== (txt.match(/〕/g) || []).length;
+        if (!txt || txt.length > 300 || unbalanced || looksDegenerate(txt)) txt = tn.desc;   // 沒寫、寫壞或〔 〕不成對就用範本原文，保證節點齊全
         return tn.label + dateSlot(false) + '：' + txt;
       });
       return bullets.join('\n') + (nodeLines.length ? '\n\n' + nodeLines.join('\n\n') : '');
     }
+    // ===== 追蹤節點的「AI 預填（尚未發生）」內容 =====
+    // AI 把尚未發生的預期內容包在〔 〕裡（例：出院診斷為〔吸入性肺炎〕），資料庫保存含〔 〕的原文；
+    // 顯示／複製／匯出時依每個人自己的偏好（存在本機瀏覽器）決定：顯示預填（標色）或留白（換成 ______）。
+    // 舊紀錄沒有〔 〕，完全不受影響。
+    const PREFILL_RE = /〔([^〔〕\n]*)〕/g;
+    function hasPrefill(t) { return /〔[^〔〕\n]*〕/.test(String(t || '')); }
+    function prefillMode() {
+      try { return localStorage.getItem(`careai_prefill_${currentLoggedWard}`) === 'show' ? 'show' : 'blank'; } catch (e) { return 'blank'; }
+    }
+    // 純文字輸出用：show → 去掉〔 〕保留內容；blank → 換成 ______
+    function applyPrefill(t, mode) {
+      return String(t || '').replace(PREFILL_RE, (m, x) => (mode || prefillMode()) === 'show' ? x : '______');
+    }
+    function renderFollowUpField() {
+      const el = document.getElementById('res-follow-up');
+      if (!el || !currentEventResult) return;
+      const text = String(currentEventResult.followUp || '');
+      const show = prefillMode() === 'show';
+      const lines = normalizePdcaText(text).split('\n').filter(l => l.trim()).map(l => {
+        const body = l.trim().replace(PREFILL_RE, (m, x) => show
+          ? `<span class="bg-amber-100 text-amber-900 border-b border-dashed border-amber-500 rounded-sm px-0.5" title="AI 預填：尚未發生，請確認">〔${x}〕</span>`
+          : '______');
+        return `<p class="text-sm text-slate-600 mb-3">${body}</p>`;
+      }).join('');
+      el.innerHTML = lines + `<div id="loading-followUp" class="absolute inset-0 bg-amber-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
+      el.dataset.snap = snapText(el);   // 沒改字就離開欄位時，不覆寫原文（避免留白模式把預填內容洗掉）
+      const has = hasPrefill(text);
+      const btn = document.getElementById('prefill-toggle');
+      if (btn) {
+        btn.classList.toggle('hidden', !has);
+        btn.innerHTML = show ? '<i class="ph ph-eye-slash"></i> 預填改留白' : '<i class="ph ph-eye"></i> 顯示 AI 預填';
+      }
+      document.getElementById('prefill-legend')?.classList.toggle('hidden', !(has && show));
+    }
+    window.togglePrefillMode = function() {
+      try { localStorage.setItem(`careai_prefill_${currentLoggedWard}`, prefillMode() === 'show' ? 'blank' : 'show'); } catch (e) {}
+      renderFollowUpField();
+    };
+    function snapText(el) {
+      return (el.innerText || '').replace(/ /g, ' ').split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+    }
+
     // 每一項的指定欄位都要有內容、長度合理、且沒有崩潰
     function itemsOk(items, fields, min) {
       if (!Array.isArray(items) || items.length < min) return false;
@@ -2069,6 +2118,7 @@ ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc
     // currentPdcaResult / currentPdcaAnalysis，後續重新生成下游欄位即會沿用
     window.syncEditableField = function(scope, field, el) {
       const text = (el.innerText || '').replace(/ /g, ' ').split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+      if (el.dataset && el.dataset.snap !== undefined && el.dataset.snap === text) return;   // 沒改字：保留原文（含〔 〕預填）
       if (scope === 'event') {
         if (currentEventResult) currentEventResult[field] = text;
       } else if (scope === 'pdca') {
@@ -2325,7 +2375,7 @@ ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc
       const cleanImprovement = currentEventResult.improvement.replace(/\(建議.*?\)/g, '').trim();
       const residentName = document.getElementById('resident-name').value.trim() || currentEventResult.residentName || '';
       const bedNumber = document.getElementById('resident-bed').value.trim() || currentEventResult.bedNumber || '';
-      const content = `【CareAI 異常事件報告】\n匯出時間：${new Date().toLocaleString('zh-TW')}\n版本：${currentApiVersion}\n\n■ 長輩姓名：${residentName || '（未填）'}\n■ 床號：${bedNumber || '（未填）'}\n\n■ 事件類型：\n${currentEventResult.eventType}\n\n■ 資料摘要：\n${formatText(currentEventResult.deIdentifiedText)}\n\n■ 原因分析：\n${formatText(currentEventResult.rootCause)}\n\n■ 改善措施：\n${formatText(cleanImprovement)}\n\n■ 追蹤情形：\n${formatText(currentEventResult.followUp)}`;
+      const content = `【CareAI 異常事件報告】\n匯出時間：${new Date().toLocaleString('zh-TW')}\n版本：${currentApiVersion}\n\n■ 長輩姓名：${residentName || '（未填）'}\n■ 床號：${bedNumber || '（未填）'}\n\n■ 事件類型：\n${currentEventResult.eventType}\n\n■ 資料摘要：\n${formatText(currentEventResult.deIdentifiedText)}\n\n■ 原因分析：\n${formatText(currentEventResult.rootCause)}\n\n■ 改善措施：\n${formatText(cleanImprovement)}\n\n■ 追蹤情形：\n${formatText(applyPrefill(currentEventResult.followUp))}`;
       downloadTxt(content, `異常事件_${currentEventResult.eventType.split(' ')[0]}`);
     };
 
@@ -2415,12 +2465,13 @@ ${instr}
 
         pushRegenHistory(field, currentEventResult[field]); // 先存舊版供「復原」
         currentEventResult[field] = newVal;
-        document.getElementById(`res-${field.toLowerCase().replace('up','-up').replace('cause','-cause')}`).innerHTML = normalizePdcaText(currentEventResult[field]).split('\n').filter(l=>l.trim()).map(l=>`<p class="text-sm text-slate-600 mb-3">${l.trim()}</p>`).join('');
+        if (field === 'followUp') renderFollowUpField(); else document.getElementById(`res-${field.toLowerCase().replace('up','-up').replace('cause','-cause')}`).innerHTML = normalizePdcaText(currentEventResult[field]).split('\n').filter(l=>l.trim()).map(l=>`<p class="text-sm text-slate-600 mb-3">${l.trim()}</p>`).join('');
       } catch (err) { console.error(err); alert('重新生成失敗'); } finally { document.getElementById(`loading-${field}`)?.classList.replace('flex', 'hidden'); }
     };
 
     window.handleCopyField = function(id, cleanTime) {
-      let text = currentEventResult[id.replace('res-', '').replace('-', 'C').replace('-', 'U')];
+      const key = { 'res-root-cause': 'rootCause', 'res-improvement': 'improvement', 'res-follow-up': 'followUp' }[id] || id.replace('res-', '');
+      let text = applyPrefill(currentEventResult[key] || '');
       if(cleanTime) text = text.replace(/\(建議.*?\)/g, '').trim();
       navigator.clipboard.writeText(text.split('\n').filter(l=>l.trim()).join('\n\n')).then(()=>showToast('已複製！')).catch(()=>showToast('複製失敗'));
     };
@@ -2473,7 +2524,7 @@ ${instr}
       try {
         const apiKey = ""; // 已移除，改由 Supabase 代理
         const eventName = EVENT_MODES.find(m => m.id === currentPdcaEventMode)?.name || '異常事件';
-        const eventsBlock = pdcaFilteredEvents.map((e, i) => `[${i + 1}] ${e.eventType}\n  住民: ${e.residentName || '未填'}　床號: ${e.bedNumber || '未填'}\n  原因: ${e.rootCause}\n  措施: ${e.improvement}\n  追蹤: ${e.followUp || ''}\n  發生時間: ${e.saveDate || ''}`).join('\n\n');
+        const eventsBlock = pdcaFilteredEvents.map((e, i) => `[${i + 1}] ${e.eventType}\n  住民: ${e.residentName || '未填'}　床號: ${e.bedNumber || '未填'}\n  原因: ${e.rootCause}\n  措施: ${e.improvement}\n  追蹤: ${applyPrefill(e.followUp, 'blank')}\n  發生時間: ${e.saveDate || ''}`).join('\n\n');
         const hasImages = pdcaUploadedFiles.length > 0;
         const thresholdText = serializeThresholds();
 
@@ -2562,7 +2613,7 @@ causeAnalysis 內容以「N.」編號分段（1. 趨勢總結 / 2. 共同根因 
         const apiKey = ""; // 已移除，改由 Supabase 代理
         const eventName = EVENT_MODES.find(m => m.id === currentPdcaEventMode)?.name || '異常事件';
         const tpl = getPdcaStyleTemplate(currentPdcaEventMode);
-        const eventsBlock = pdcaFilteredEvents.map((e, i) => `[${i + 1}] ${e.eventType}\n  住民: ${e.residentName || '未填'}　床號: ${e.bedNumber || '未填'}\n  原因: ${e.rootCause}\n  措施: ${e.improvement}\n  追蹤: ${e.followUp || ''}\n  發生時間: ${e.saveDate || ''}`).join('\n\n');
+        const eventsBlock = pdcaFilteredEvents.map((e, i) => `[${i + 1}] ${e.eventType}\n  住民: ${e.residentName || '未填'}　床號: ${e.bedNumber || '未填'}\n  原因: ${e.rootCause}\n  措施: ${e.improvement}\n  追蹤: ${applyPrefill(e.followUp, 'blank')}\n  發生時間: ${e.saveDate || ''}`).join('\n\n');
         const thresholdText = serializeThresholds();
 
         const hasImages = pdcaUploadedFiles.length > 0;
@@ -2727,7 +2778,7 @@ ${tpl.act}
         const eventName = EVENT_MODES.find(m => m.id === currentPdcaEventMode)?.name || '異常事件';
         const tpl = getPdcaStyleTemplate(currentPdcaEventMode);
         const fieldTemplate = tpl[field] || '';
-        const eventsSummary = pdcaFilteredEvents.map((e, i) => `[${i + 1}] ${e.eventType}\n  住民: ${e.residentName || '未填'}　床號: ${e.bedNumber || '未填'}\n  原因: ${e.rootCause}\n  措施: ${e.improvement}\n  追蹤: ${e.followUp || ''}`).join('\n\n');
+        const eventsSummary = pdcaFilteredEvents.map((e, i) => `[${i + 1}] ${e.eventType}\n  住民: ${e.residentName || '未填'}　床號: ${e.bedNumber || '未填'}\n  原因: ${e.rootCause}\n  措施: ${e.improvement}\n  追蹤: ${applyPrefill(e.followUp, 'blank')}`).join('\n\n');
         const hasImages = pdcaUploadedFiles.length > 0;
         const thresholdText = serializeThresholds();
 
@@ -2947,7 +2998,7 @@ Act: ${currentPdcaResult.act}
           document.getElementById('res-event-type').innerHTML = `<p class="text-sm text-slate-600">${currentEventResult.eventType}</p>`;
           document.getElementById('res-root-cause').innerHTML = fmt(normalizePdcaText(currentEventResult.rootCause)) + `<div id="loading-rootCause" class="absolute inset-0 bg-rose-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
           document.getElementById('res-improvement').innerHTML = fmt(normalizePdcaText(currentEventResult.improvement)) + `<div id="loading-improvement" class="absolute inset-0 bg-emerald-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
-          document.getElementById('res-follow-up').innerHTML = fmt(normalizePdcaText(currentEventResult.followUp)) + `<div id="loading-followUp" class="absolute inset-0 bg-amber-50/80 hidden items-center justify-center"><i class="ph ph-spinner animate-spin text-2xl text-blue-600"></i></div>`;
+          renderFollowUpField();
           // 版本號不對外顯示（後台仍知道 currentApiVersion）；badge 維持隱藏
           document.getElementById('aside-version-badge').style.display = 'none';
         } else document.getElementById('empty-state-event').classList.remove('hidden');
