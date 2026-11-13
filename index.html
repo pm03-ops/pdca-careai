@@ -803,7 +803,7 @@
     // 措施與追蹤天生一對一，數量也被 5～7 項鎖住。
     const STRUCT_IMPROVEMENT_RULE = `improvements：5～7 項改善措施，必須針對「已定稿的原因分析」逐項提出對策，優先結合機構可用資源與設備；若原因較少，只能從環境、設備、流程、人員訓練、家屬衛教等通用照護面向補充一般性對策，嚴禁虛構個案未提及的事實。每一項包含：
    ・measure：一句具體可行的措施（不要編號、不要括號、不要寫時間）。
-   ・timing：建議完成或執行時間，例如「建議於 3 天內完成」「建議 1 週內」「建議每班執行」「建議每月稽核一次」「建議立即執行」（依措施性質填入具體時間；不要括號）。`;
+   ・timing：建議完成或執行時間，必須符合措施性質：一次性的工作（訂定或修訂流程、辦理教育訓練、評估、照會、會議、向家屬說明）寫期限，例如「建議於 3 天內完成」「建議 1 個月內完成」；持續性的照護動作寫頻率，例如「建議每班執行」「建議每日執行」；只有稽核、查核類措施才寫「建議每月稽核一次」這類稽核頻率；需要馬上做的寫「建議立即執行」（不要括號）。`;
     const STRUCT_FOLLOWUP_RULE = `   ・followUp：對應這一項措施「之後要追蹤／確認的事項」，一律未來式（例如「追蹤…是否落實」「確認…執行成效」），嚴禁寫成「已完成」等過去式；不要寫日期、不要括號。
    ・ongoing：這項追蹤是否為持續性追蹤（true／false）。`;
 
@@ -826,7 +826,7 @@
       const hasMedical = templateNodes.some(n => /出院|門診|回診|就醫/.test(n.label));
       return `trackingNodes：依下列節點順序，每個節點一項（共 ${templateNodes.length} 項）；label 必須與節點名稱完全相同，text 為該節點的追蹤敘述，可參考範本依個案改寫，不要寫日期。
    ⚠️【已發生 vs 尚未發生】紀錄中「已經發生、已記載」的事實（例如已送往的醫院、已確診的診斷、已做的檢查與處置）可以直接寫。
-   「尚未發生」或紀錄沒有記載的內容（例如出院診斷、回診科別與醫師評估、檢驗結果、傷口癒合情形、翻身頻率等數值、結案時的狀況），可以依個案合理預填，但每一段預填內容都必須用〔 〕整段包起來，例如「出院診斷為〔吸入性肺炎〕」「傷處〔已癒合、無感染〕」「每〔2〕小時」；沒有把握就保留範本的 ______。〔 〕外面不可出現任何尚未發生的結果；已發生的事實不要放進〔 〕。
+   「尚未發生」或紀錄沒有記載的內容（例如出院診斷、回診科別與醫師評估、檢驗結果、傷口癒合情形、翻身頻率等數值、結案時的狀況），可以依個案合理預填，但每一段預填內容都必須用〔 〕整段包起來，例如「出院診斷為〔吸入性肺炎〕」「傷處〔已癒合、無感染〕」「每〔2〕小時」；沒有把握就保留範本的 ______。〔 〕外面不可出現任何尚未發生的結果；已發生的事實、以及範本原有的固定字句（例如「家屬已知會」「意識清楚」「本案予以結案」）照抄，不要放進〔 〕。
    ⚠️ 量測值與檢驗數值（體溫、脈搏、呼吸、血壓、血氧、血糖、檢驗值）與日期一律保留範本的 __ 或 ______，不可預填任何數字。
 ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc}）`).join('\n')}`
         + (hasMedical ? '' : '\n⚠️ 節點中沒有出院／門診／回診／就醫，代表本案查無住院或就醫資訊：所有 followUp 與節點敘述都不得提及出院、門診、回診、就醫。');
@@ -842,6 +842,15 @@ ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc
         return `${i + 1}. ${ms}${tm ? `(${tm})` : ''}`;
       }).join('\n');
     }
+    // 〔x〕連同前兩個字若與範本原文一字不差（例：「家屬〔已知會〕」→ 範本有「家屬已知會」），代表是範本固定字句、不是預填，拆掉〔 〕
+    function unwrapTemplateWording(txt, desc) {
+      const d = String(desc || '').replace(/\s/g, '');
+      return String(txt || '').replace(/〔([^〔〕\n]*)〕/g, (m, x, off, str) => {
+        const prev = str.slice(Math.max(0, off - 4), off).replace(/[〔〕\s]/g, '').slice(-2);
+        const probe = (prev + x).replace(/\s/g, '');
+        return (x.trim().length >= 2 && prev.length === 2 && d.includes(probe)) ? x : m;
+      });
+    }
     function buildFollowUpText(items, nodes, templateNodes) {
       const bullets = items.map(it => dateSlot(!!it.ongoing) + cleanItemText(it.followUp));
       const nodeLines = templateNodes.map(tn => {
@@ -849,6 +858,7 @@ ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc
         const hit = (nodes || []).find(n => String((n && n.label) || '').replace(/\s/g, '') === key);
         let txt = hit ? String(hit.text || '').trim().replace(/^[^，。；（]{2,10}（[^）]*）：/, '')
           .replace(/〔([\s　\/／_]*)〕/g, '$1') : '';   // 〔　/　/　〕〔______〕這類空白欄不算預填，拆掉〔 〕
+        txt = unwrapTemplateWording(txt, tn.desc);
         const unbalanced = (txt.match(/〔/g) || []).length !== (txt.match(/〕/g) || []).length;
         if (!txt || txt.length > 300 || unbalanced || looksDegenerate(txt)) txt = tn.desc;   // 沒寫、寫壞或〔 〕不成對就用範本原文，保證節點齊全
         return tn.label + dateSlot(false) + '：' + txt;
@@ -940,7 +950,7 @@ ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc
     // 都讀取同一份規則，確保格式、語氣、條列方式永遠一致，不會各改各的。
     // =====================================================================
     const EVENT_FIELD_RULES = {
-      rootCause: '以條列式列出事件的根本原因，每點以「N.」編號開頭（N 從 1 起算），每點之間用換行符號分隔；語氣專業客觀。請逐點做出「根因分析」——不只是複述事件經過，更要分析為什麼會發生；若為住院、就醫類事件，也要分析為什麼會惡化到需要住院或就醫。可從住民疾病與身心功能、早期徵兆辨識與升級處置時機、照護流程與執行落實、感染控制、環境設備、家屬因素等面向切入，每點把一個根因連同因果推論說清楚、有深度。⚠️不要只是把時間序列重講一遍。⚠️可依紀錄事實做因果推論，但不得虛構紀錄沒有的事件、數據或日期；紀錄沒有明寫的部分請用「可能」「需確認」等措辭，不要寫成既定事實。⚠️若紀錄含多次住院／多個事件（不同日期），只分析「本次事件」，不得把其他次（例如出院後再次住院）的原因混入，無法確定歸屬時寧可省略。⚠️嚴禁重複或近似句子、把輸入資料或本指令文字抄進答案；講完即停止。',
+      rootCause: '以條列式列出事件的根本原因，每點以「N.」編號開頭（N 從 1 起算），每點之間用換行符號分隔；語氣專業客觀。請逐點做出「根因分析」——不只是複述事件經過，更要分析為什麼會發生；若為住院、就醫類事件，也要分析為什麼會惡化到需要住院或就醫。可從住民疾病與身心功能、早期徵兆辨識與升級處置時機、照護流程與執行落實、感染控制、環境設備、家屬因素等面向切入，每點把一個根因連同因果推論說清楚、有深度。⚠️不要只是把時間序列重講一遍。⚠️可依紀錄事實做因果推論，但不得虛構紀錄沒有的事件、數據或日期；紀錄沒有明寫的部分請用「可能」「需確認」等措辭，不要寫成既定事實。⚠️臨床發現與診斷只能照紀錄的程度寫：紀錄寫「疑似」就維持「疑似」，不可升級為確診，也不可加入紀錄沒有的檢查結果（例如紀錄只有聽診囉音，不可寫成肺浸潤）。⚠️「照護是否疏失」「數值是否偏高偏低」屬於推論而非紀錄事實，請用「可能」「需確認」等語氣，不可用「直接導致」「顯然」「顯示疏失」等定論語氣（分析深度不變，只是語氣保留）。⚠️若紀錄含多次住院／多個事件（不同日期），只分析「本次事件」，不得把其他次（例如出院後再次住院）的原因混入，無法確定歸屬時寧可省略。⚠️嚴禁重複或近似句子、把輸入資料或本指令文字抄進答案；講完即停止。',
       improvement: '針對「原因分析」逐項提出對策，優先結合機構可用資源與設備，制定「具體、可行」的改善措施；改善措施總數以 5～7 點為目標，若原因較少，只能從環境、設備、流程、人員訓練、家屬衛教等「通用照護面向」補充一般性對策，⚠️嚴禁為了湊點數而虛構或推論個案未提及的事實（例如未發生的日期、行為、由口進食等）；每點以「N.」編號開頭；每點結尾務必加上「實際建議的完成或執行時間」，用半形括號包住，例如：(建議於 3 天內完成)、(建議 1 週內)、(建議每班執行)、(建議每月稽核一次)、(建議立即執行) —— 請依措施性質填入具體時間，切勿原樣輸出「建議操作時間」這幾個字；每點之間用換行符號分隔。',
       followUp: '以條列式撰寫「後續要追蹤的計畫」——一律用未來式，描述「之後要追蹤／確認的事項」（例如「追蹤…是否落實」「確認…執行成效」），嚴禁寫成「已完成…」「已會診…」等過去式；與「改善措施」一對一對應；每點開頭必須使用【全形括號＋台灣日期格式（年/月/日，年在前，日期一律留白）】：「（ 　/　/　）」或「（ 　/　/　－持續）」，不可用半形括號、不可自行填入日期；每點之間用換行符號分隔。'
     };
@@ -2295,7 +2305,6 @@ ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc
           【已定稿的原因分析（改善措施必須據此逐項提出對策）】：
           ${rootCause}
           【請填寫的欄位】（格式由系統排版，你只需要填內容，不要自己加編號、括號或日期）：
-          - eventType：事件類型（簡短）。
           - ${STRUCT_IMPROVEMENT_RULE}
           ${STRUCT_FOLLOWUP_RULE}
           - ${trackingNodesRule(templateNodes)}
@@ -2306,7 +2315,6 @@ ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc
 
         const parts = [{ text: promptText }, ...imageParts];
         const restSchema = {
-          eventType: { type: 'STRING' },
           improvements: { type: 'ARRAY', minItems: 5, maxItems: 7, items: { type: 'OBJECT',
             properties: { measure: { type: 'STRING' }, timing: { type: 'STRING' }, followUp: { type: 'STRING' }, ongoing: { type: 'BOOLEAN' } },
             required: ['measure', 'timing', 'followUp', 'ongoing'] } },
@@ -2318,12 +2326,12 @@ ${templateNodes.map((n, i) => `   ${i + 1}. ${n.label}（參考範本：${n.desc
         let parsed = null;
         for (const model of [null, PRO_MODEL, null]) {
           let cand = null;
-          try { cand = await callGeminiJSON(parts, restSchema, model, model ? PRO_TUNING : GEN_TUNING, ['eventType', 'improvements', 'trackingNodes', 'deIdentifiedText', 'imageSummary']); }
+          try { cand = await callGeminiJSON(parts, restSchema, model, model ? PRO_TUNING : GEN_TUNING, ['improvements', 'trackingNodes', 'deIdentifiedText', 'imageSummary']); }
           catch (e) { console.warn('改善措施／追蹤產生失敗，自動重試…', model || 'flash', e); continue; }
           const items = Array.isArray(cand.improvements) ? cand.improvements.slice(0, 7) : [];
           if (itemsOk(items, ['measure', 'followUp'], 5) && !looksDegenerate(cand.deIdentifiedText)) {
             parsed = {
-              eventType: cand.eventType || '',
+              eventType: eventName,   // 固定用分析類型名稱：PDCA 依事件類型是否包含「跌倒事件／非計畫性住院／壓傷事件／感染事件」來分類
               improvement: buildImprovementText(items),
               followUp: buildFollowUpText(items, cand.trackingNodes, templateNodes),
               deIdentifiedText: cand.deIdentifiedText || '',
